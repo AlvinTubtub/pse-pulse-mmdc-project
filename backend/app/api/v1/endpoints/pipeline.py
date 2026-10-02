@@ -6,9 +6,11 @@ from sqlalchemy.orm import Session
 from backend.app.config import get_settings, Settings
 from backend.app.database import get_db
 from backend.app.models.pipeline_run import PipelineRun
+from backend.app.models.market_data_import import MarketDataImport
 from backend.app.schemas.pipeline import (
     PipelineStatusResponse,
     PipelineRunRead,
+    MarketDataImportRead,
 )
 
 router = APIRouter()
@@ -57,10 +59,35 @@ def get_pipeline_status(
         for r in recent_runs
     ]
 
+    # Query latest market data import provenance
+    last_import = (
+        db.query(MarketDataImport)
+        .order_by(MarketDataImport.imported_at.desc())
+        .first()
+    )
+    last_import_item = None
+    if last_import:
+        last_import_item = MarketDataImportRead(
+            id=last_import.id,
+            source_type=last_import.source_type,
+            source_filename=last_import.source_filename,
+            trade_date=last_import.trade_date,
+            sha256=last_import.sha256,
+            imported_at=last_import.imported_at,
+            status=last_import.status,
+            records_seen=last_import.records_seen,
+            records_valid=last_import.records_valid,
+            records_inserted=last_import.records_inserted,
+            records_updated=last_import.records_updated,
+            records_rejected=last_import.records_rejected,
+            error_message=last_import.error_message,
+        )
+
     return PipelineStatusResponse(
         status="idle" if not recent_runs or recent_runs[0].status == "COMPLETED" else "active",
         schedule="0 18 * * 1-5 (Weekdays 18:00 PHT)",
         is_demo_mode=settings.DEMO_MODE,
         last_run=last_run_item,
+        last_market_data_import=last_import_item,
         recent_runs=all_read,
     )

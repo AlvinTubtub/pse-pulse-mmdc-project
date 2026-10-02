@@ -1,8 +1,24 @@
 """Pipeline status Pydantic schemas."""
 
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, List
 from backend.app.schemas.common import BaseSchema
+
+
+class MarketDataImportRead(BaseSchema):
+    id: int
+    source_type: str
+    source_filename: str
+    trade_date: Optional[date] = None
+    sha256: str
+    imported_at: datetime
+    status: str
+    records_seen: int
+    records_valid: int
+    records_inserted: int
+    records_updated: int
+    records_rejected: int
+    error_message: Optional[str] = None
 
 
 class PipelineRunRead(BaseSchema):
@@ -22,6 +38,7 @@ class PipelineStatusResponse(BaseSchema):
     schedule: str
     is_demo_mode: bool
     last_run: Optional[PipelineRunRead] = None
+    last_market_data_import: Optional[MarketDataImportRead] = None
     recent_runs: List[PipelineRunRead] = []
     stages: List[str] = [
         "availability_check",

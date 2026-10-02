@@ -155,6 +155,25 @@ npm run build
 
 ---
 
+## Market Data Ingestion (EOD Pipeline)
+
+PSE Pulse supports safe, idempotent ingestion of official Philippine Stock Exchange (PSE) Daily Quotation Reports (DQR) supplied as local PDF or text files:
+
+```bash
+# Dry run: parse and validate without committing database changes
+python -m backend.pipeline.runner --source-file path/to/report.pdf --dry-run
+
+# Ingest official report into daily_prices with SHA-256 deduplication
+python -m backend.pipeline.runner --source-file path/to/report.pdf
+
+# Ingest market data only (skip downstream forecasting)
+python -m backend.pipeline.runner --source-file path/to/report.pdf --ingest-only
+```
+
+See [docs/data-ingestion.md](docs/data-ingestion.md) for full ingestion architecture, validation rules, and schema specifications.
+
+---
+
 ## API Endpoints (v1)
 
 | Method | Endpoint | Description |

@@ -1,0 +1,51 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>
+endobj
+4 0 obj
+<< /Length 444 >>
+stream
+BT
+/F1 12 Tf
+50 720 Td
+(PHILIPPINE STOCK EXCHANGE, INC.) Tj
+0 -20 Td
+(DAILY QUOTATION REPORT) Tj
+0 -20 Td
+(October 1, 2026) Tj
+0 -20 Td
+(SYMBOL BID ASK OPEN HIGH LOW CLOSE VOLUME VALUE) Tj
+0 -20 Td
+(SMPH 28.40 28.50 28.20 28.80 28.00 28.60 1250000 35625000) Tj
+0 -20 Td
+(BDO 141.50 142.00 141.00 143.50 140.50 142.00 650000 92300000) Tj
+0 -20 Td
+(ALI 31.00 31.10 30.90 31.50 30.80 31.25 800000 24960000) Tj
+0 -20 Td
+(DMC - - - - - - - -) Tj
+ET
+
+endstream
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+xref
+0 6
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000241 00000 n 
+0000000736 00000 n 
+trailer
+<< /Size 6 /Root 1 0 R >>
+startxref
+806
+%%EOF

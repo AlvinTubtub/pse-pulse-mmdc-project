@@ -19,9 +19,9 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-# Inject database URL from settings
-settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+# Inject database URL from environment or settings
+db_url = os.environ.get("DATABASE_URL") or get_settings().DATABASE_URL
+config.set_main_option("sqlalchemy.url", db_url)
 
 
 def run_migrations_offline() -> None:
@@ -43,10 +43,10 @@ def run_migrations_online() -> None:
     configuration = config.get_section(config.config_ini_section)
     if configuration is None:
         configuration = {}
-    configuration["sqlalchemy.url"] = settings.DATABASE_URL
+    configuration["sqlalchemy.url"] = db_url
 
     connect_args = {}
-    if settings.DATABASE_URL.startswith("sqlite"):
+    if db_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
 
     connectable = engine_from_config(
@@ -60,7 +60,7 @@ def run_migrations_online() -> None:
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
-            render_as_batch=True if settings.DATABASE_URL.startswith("sqlite") else False,
+            render_as_batch=True if db_url.startswith("sqlite") else False,
         )
 
         with context.begin_transaction():

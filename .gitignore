@@ -81,3 +81,11 @@ infrastructure/azure/*.json
 # Test & smoke artifacts
 *.png
 
+# Market data directories & local report files (Never commit real downloaded PSE files)
+data/
+data/incoming/
+data/processed/
+data/rejected/
+*.pdf
+!backend/tests/fixtures/**/*.pdf
+

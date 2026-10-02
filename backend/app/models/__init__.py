@@ -7,6 +7,7 @@ from backend.app.models.price import DailyPrice
 from backend.app.models.model_metadata import ModelMetadata
 from backend.app.models.forecast import Forecast
 from backend.app.models.pipeline_run import PipelineRun
+from backend.app.models.market_data_import import MarketDataImport
 
 __all__ = [
     "Base",
@@ -16,4 +17,5 @@ __all__ = [
     "ModelMetadata",
     "Forecast",
     "PipelineRun",
+    "MarketDataImport",
 ]
