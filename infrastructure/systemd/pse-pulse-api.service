@@ -1,0 +1,26 @@
+[Unit]
+Description=PSE Pulse FastAPI Backend Service
+After=network.target
+
+[Service]
+Type=simple
+User=psepulse
+Group=psepulse
+WorkingDirectory=/opt/pse-pulse
+EnvironmentFile=/etc/pse-pulse/.env
+ExecStart=/opt/pse-pulse/backend/.venv/bin/uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 1 --log-level info
+
+# Memory & Process Protections for 1 GiB Host RAM
+MemoryMax=350M
+MemoryHigh=300M
+Restart=always
+RestartSec=5s
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

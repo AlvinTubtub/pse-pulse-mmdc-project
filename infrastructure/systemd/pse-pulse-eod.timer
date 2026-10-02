@@ -1,0 +1,11 @@
+[Unit]
+Description=PSE Pulse End-of-Day Pipeline Timer (Weekdays 18:00 PHT)
+
+[Timer]
+# 18:00 PHT (UTC+8) corresponds to 10:00 UTC
+OnCalendar=Mon..Fri 10:00:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

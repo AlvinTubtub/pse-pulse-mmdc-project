@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "location": {
+      "value": "southeastasia"
+    },
+    "environment": {
+      "value": "production"
+    },
+    "vmSize": {
+      "value": "Standard_B2ats_v2"
+    },
+    "adminUsername": {
+      "value": "psepulse"
+    },
+    "adminSshPublicKey": {
+      "value": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPROVIDE_YOUR_SSH_PUBLIC_KEY_HERE psepulse@admin"
+    },
+    "allowedSshSourceIp": {
+      "value": "YOUR_HOME_OR_OFFICE_IP/32"
+    },
+    "dbAdminUsername": {
+      "value": "pseadmin"
+    },
+    "dbAdminPassword": {
+      "value": "CHANGE_ME_TO_A_COMPLEX_24_CHAR_PASSWORD!"
+    },
+    "dbStorageSizeGB": {
+      "value": 32
+    }
+  }
+}
