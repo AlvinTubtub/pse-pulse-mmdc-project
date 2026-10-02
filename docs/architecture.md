@@ -109,7 +109,9 @@ To provide deep historical data (2020–2026) for model scoring and backtesting,
 
 ## 7. Model Decoupling & Inference Serving (Phase 3 Architecture)
 
-As detailed in `docs/model-porting-plan.md`:
-- **Training is strictly offline:** Heavy libraries (PyTorch, TensorFlow, pmdarima) run on developer machines or isolated CI workers.
-- **Inference is lightweight:** Production uses pre-computed ARIMA parameters, scikit-learn regression pipelines, and ONNX Runtime for LSTM scoring.
-- **Artifact Management:** Pre-trained model artifacts are versioned in Azure Blob Storage with SHA-256 manifest validation on startup.
+As detailed in [docs/model-porting-plan.md](model-porting-plan.md), [docs/model-artifact-contract.md](model-artifact-contract.md), and [docs/real-inference-design.md](real-inference-design.md):
+- **Training is strictly offline:** Heavy libraries (PyTorch, TensorFlow, pmdarima) run on developer machines or isolated CI workers. The CLI tool `backend.app.forecasting.real.training.refit` generates versioned bundles.
+- **Inference is lightweight:** Production uses pre-computed ARIMA parameters (`statsmodels.tsa.arima.model.ARIMA`) with online `append(actual, refit=False)` updating and scikit-learn Lag-Informed Regression (`StandardScaler` + `Lasso` cyclic coordinate descent).
+- **Artifact Management:** Pre-trained model artifacts are versioned in `backend/artifacts/models/{bundle_version}/{symbol}/` with mandatory pre-deserialization SHA-256 manifest validation on startup.
+- **Lineage Tracking:** Alembic revision `0005_add_model_artifacts_and_forecast_lineage` establishes relational lineage connecting `forecasts` to `model_artifacts`, origin dates, and price deltas.
+- **Production Safety Gate:** `REAL_MODELS_ENABLED=False` is enforced by default in production settings to prevent premature activation until end-to-end evaluation is approved.

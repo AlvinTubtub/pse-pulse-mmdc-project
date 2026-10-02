@@ -9,6 +9,7 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    String,
     ForeignKey,
     UniqueConstraint,
     Index,
@@ -23,9 +24,12 @@ class Forecast(Base):
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     company_id = Column(Integer, ForeignKey("companies.id"), nullable=False, index=True)
     model_id = Column(Integer, ForeignKey("model_metadata.id"), nullable=False, index=True)
+    model_artifact_id = Column(String(36), ForeignKey("model_artifacts.id"), nullable=True, index=True)
     pipeline_run_id = Column(Integer, ForeignKey("pipeline_runs.id"), nullable=True, index=True)
+    origin_date = Column(Date, nullable=True, index=True)
     target_date = Column(Date, nullable=False, index=True)
     predicted_price = Column(Numeric(12, 4), nullable=False)
+    predicted_delta = Column(Numeric(12, 4), nullable=True)
     lower_bound = Column(Numeric(12, 4), nullable=True)
     upper_bound = Column(Numeric(12, 4), nullable=True)
     confidence_level = Column(Float, default=0.95, nullable=False)
@@ -38,6 +42,7 @@ class Forecast(Base):
 
     company = relationship("Company", back_populates="forecasts")
     model_metadata = relationship("ModelMetadata", back_populates="forecasts")
+    model_artifact = relationship("ModelArtifact", back_populates="forecasts")
     pipeline_run = relationship("PipelineRun", backref="forecasts")
 
     __table_args__ = (

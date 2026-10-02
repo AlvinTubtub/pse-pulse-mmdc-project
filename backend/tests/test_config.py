@@ -121,11 +121,50 @@ async def test_lifespan_production_never_seeds_even_if_demo_mode_true(monkeypatc
         mock_seed.assert_not_called()
 
 
+def test_settings_auto_create_schema_default():
+    """AUTO_CREATE_SCHEMA must default to False so Alembic remains authoritative."""
+    s = Settings()
+    assert s.AUTO_CREATE_SCHEMA is False
+
+
+def test_settings_production_auto_create_schema_rejected(monkeypatch):
+    """Production with AUTO_CREATE_SCHEMA=true must fail configuration validation fast."""
+    monkeypatch.setenv("ENVIRONMENT", "production")
+    monkeypatch.setenv("DEMO_MODE", "false")
+    monkeypatch.setenv("AUTO_CREATE_SCHEMA", "true")
+    with pytest.raises(ValueError, match="AUTO_CREATE_SCHEMA must be false when ENVIRONMENT=production"):
+        Settings()
+
+
+def test_settings_development_auto_create_schema_allowed(monkeypatch):
+    """Development with AUTO_CREATE_SCHEMA=true is permitted when explicitly requested."""
+    monkeypatch.setenv("ENVIRONMENT", "development")
+    monkeypatch.setenv("AUTO_CREATE_SCHEMA", "true")
+    s = Settings()
+    assert s.AUTO_CREATE_SCHEMA is True
+
+
 @pytest.mark.asyncio
-async def test_lifespan_development_invokes_create_all_and_seed(monkeypatch):
-    """In non-production development with DEMO_MODE=true, lifespan initializes schema and seeds data."""
+async def test_lifespan_development_defaults_to_no_create_all(monkeypatch):
+    """By default in development, AUTO_CREATE_SCHEMA is False so create_all is not invoked."""
     monkeypatch.setattr("backend.app.main.settings.ENVIRONMENT", "development")
     monkeypatch.setattr("backend.app.main.settings.DEMO_MODE", True)
+    monkeypatch.setattr("backend.app.main.settings.AUTO_CREATE_SCHEMA", False)
+
+    with patch("backend.app.main.Base.metadata.create_all") as mock_create_all, \
+         patch("backend.app.main.seed_database_if_empty") as mock_seed:
+        async with lifespan(app):
+            pass
+
+        mock_create_all.assert_not_called()
+        mock_seed.assert_called_once()
+
+@pytest.mark.asyncio
+async def test_lifespan_development_invokes_create_all_when_flag_enabled(monkeypatch):
+    """When AUTO_CREATE_SCHEMA is explicitly enabled in development, create_all is called."""
+    monkeypatch.setattr("backend.app.main.settings.ENVIRONMENT", "development")
+    monkeypatch.setattr("backend.app.main.settings.DEMO_MODE", True)
+    monkeypatch.setattr("backend.app.main.settings.AUTO_CREATE_SCHEMA", True)
 
     with patch("backend.app.main.Base.metadata.create_all") as mock_create_all, \
          patch("backend.app.main.seed_database_if_empty") as mock_seed:

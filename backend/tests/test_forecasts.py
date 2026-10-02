@@ -67,3 +67,17 @@ def test_model_multi_version_coexistence(db_session):
     with pytest.raises(IntegrityError):
         db_session.commit()
     db_session.rollback()
+
+
+def test_list_models_endpoint(client):
+    """Verify GET /api/v1/models returns active forecasting model metadata."""
+    response = client.get("/api/v1/models")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) >= 2
+    for m in data:
+        assert "code" in m
+        assert "name" in m
+        assert "version" in m
+        assert m["is_active"] is True

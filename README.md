@@ -198,6 +198,26 @@ python -m backend.pipeline.bootstrap.cli --source-root /path/to/official/repo --
 
 See [docs/data-ingestion.md](docs/data-ingestion.md) and [docs/historical-bootstrap-audit.md](docs/historical-bootstrap-audit.md) for full ingestion architecture, validation rules, and schema specifications.
 
+### Real Model Offline Refit & Inference (Phase 3A)
+
+PSE Pulse incorporates production-grade forecasting models ported from the official research baseline (Lag-Informed Regression / LASSO and statsmodels ARIMA):
+
+- **Versioned Artifact Contract:** Models are saved as `.joblib` binaries with companion `.metadata.json` files documenting cryptographic SHA-256 checksums, hyperparameters, and research provenance.
+- **Fail-Closed Deserialization:** The loader pre-verifies binary SHA-256 hashes prior to calling `joblib.load()`, strictly preventing bytecode execution of tampered artifacts.
+- **Atomic 30-Forecast Lineage:** All 30 forecasts across 15 equities are committed in a single atomic transaction linking foreign keys to `model_artifacts`.
+- **Production Safety Gate:** `REAL_MODELS_ENABLED=False` is enforced by default in production.
+
+```bash
+# Offline refit tool: fit LIR and ARIMA into a versioned bundle
+python -m backend.app.forecasting.real.training.refit --symbols BPI,SM --bundle-version 2026.03.01-v1
+
+# Real inference pipeline runner: predict next trading session with verified artifacts
+python -m backend.pipeline.forecasting.real_runner --bundle-version 2026.03.01-v1 --dry-run
+```
+
+See [docs/model-artifact-contract.md](docs/model-artifact-contract.md) and [docs/real-inference-design.md](docs/real-inference-design.md).
+
+
 ---
 
 ## API Endpoints (v1)

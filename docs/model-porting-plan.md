@@ -54,115 +54,127 @@ For the personal Azure deployment, we enforce a **strict separation of concerns*
 
 | Property | Research Baseline | Personal Azure Production Design |
 | :--- | :--- | :--- |
-| **Model Type** | Univariate Time Series ARIMA $(p, d, q)$ | Fitted Auto-ARIMA Parameters / Coefficients |
-| **Training Engine**| `pmdarima.auto_arima` / `statsmodels` | Offline calibration fitting parameters per symbol |
-| **Inference Engine**| Dynamic in-memory fitting | `statsmodels.tsa.arima.model.ARIMAResults` or lightweight recursive NumPy ARMA filter |
-| **Memory Footprint**| High (during model identification) | Low ($< 30\text{ MB}$ for 15 companies) |
-| **Latency Target**| $2,000 - 5,000\text{ ms}$ | $< 50\text{ ms}$ per symbol |
-| **Artifact Format**| Ad-hoc Python pickle | JSON parameters + fitted autoregressive weights (`arima_params.json`) |
+| **Model Type** | Univariate Time Series ARIMA $(p, d, q)$ with explicit trend | Native `FittedArimaModel` wrapping `statsmodels.tsa.arima.model.ARIMAResults` |
+| **Training Engine**| `statsmodels.tsa.arima.model.ARIMA` with optimizer retry loop | Offline calibration fitting parameters per symbol with convergence proof |
+| **Inference Engine**| Dynamic state update via `result.append(actual, refit=False)` | `result.append([actual], refit=False)` + `forecast_one()` (no parameter refitting) |
+| **Operational Profile**| State-space recursion without refitting | Bounded one-step evaluation |
+| **Artifact Format**| `.joblib` fitted result + companion `.metadata.json` | Checksum-verified destination `.joblib` + `.metadata.json` |
 
-**Porting Action:**
-- Isolate hyperparameter grid search to offline scripts.
-- Export selected $(p, d, q)$ orders and recent residuals into a compact JSON artifact.
-- Production runtime reads the last $k$ historical prices from PostgreSQL, applies the fixed difference and ARMA weights, and outputs the next-day point forecast with confidence intervals.
-
----
-
-### 2.2 Model 2: Lag-10 Linear Regression (LIR)
-
-| Property | Research Baseline | Personal Azure Production Design |
-| :--- | :--- | :--- |
-| **Model Type** | Ridge / OLS on 10 lag features | Scikit-learn Linear Regression Pipeline |
-| **Features** | $[P_{t-1}, P_{t-2}, \dots, P_{t-10}]$ | Extracted dynamically from recent `daily_prices` |
-| **Inference Engine**| Scikit-learn `predict()` | Scikit-learn or raw matrix dot-product in NumPy |
-| **Memory Footprint**| Negligible ($< 5\text{ MB}$) | Negligible ($< 5\text{ MB}$) |
-| **Latency Target**| $< 20\text{ ms}$ | $< 5\text{ ms}$ per symbol |
-| **Artifact Format**| `.pkl` / `.joblib` | Scikit-learn `Pipeline` serialized via Joblib + checksums |
-
-**Porting Action:**
-- Train regression weights against the 2020-2026 bootstrap dataset.
-- Port feature extractor (`backend/pipeline/features/feature_builder.py`) to query the preceding 10 trading sessions for any symbol.
-- Execute inference using pre-loaded Joblib models or pure NumPy weight vectors.
+**Authentic Implementation Invariants:**
+- Uses standard `statsmodels.tsa.arima.model.ARIMA` (never `pmdarima.auto_arima`).
+- Explicit candidate specifications define order $(p, d, q)$ and deterministic trend ($n, c, t, ct$).
+- Optimization executes with configured retry iterations (e.g. 200, 1,000) and extracts optimizer convergence evidence (`mle_retvals`).
+- In-flight inference consumes new historical observations through state updates (`append(actual, refit=False)`), completely avoiding expensive online parameter re-estimation.
+- Forecast generation produces strictly one next-session Close forecast per step with finite check validation.
 
 ---
 
-### 2.3 Model 3: Long Short-Term Memory (LSTM)
+### 2.2 Model 2: Lag-Informed Regression (LIR)
 
 | Property | Research Baseline | Personal Azure Production Design |
 | :--- | :--- | :--- |
-| **Model Type** | PyTorch / TensorFlow Multi-layer LSTM | ONNX Runtime CPU Inference Engine |
-| **Input Shape** | $(N, 30, F)$ (30-day sequence, normalized) | $(1, 30, F)$ single symbol sequence |
-| **Training Engine**| PyTorch `torch.nn.LSTM` with Adam optimizer | Offline training on GPU/development machine |
-| **Inference Engine**| Full PyTorch runtime | **`onnxruntime`** (Lightweight C++ runtime with Python bindings) |
-| **Memory Footprint**| $\sim 1.5 - 2.5\text{ GB}$ (PyTorch package) | $\sim 50 - 100\text{ MB}$ (ONNX Runtime) |
-| **Latency Target**| $150 - 300\text{ ms}$ | $< 35\text{ ms}$ per symbol on CPU |
-| **Artifact Format**| PyTorch `.pt` / `.pth` state dict | Optimized **`lstm_model.onnx`** + MinMax scaler Joblib |
+| **Model Type** | Causal OHLCV Feature Pipeline + PACF + StandardScaler + LASSO | Native `LagRegressionModel` wrapping `StandardScaler` + `Lasso(selection="cyclic")` |
+| **Target Variable** | Next-session Close price delta: $Y_{t+1} = P_{t+1} - P_t$ | Delta target ($Y_{t+1}$); Reconstructs $\hat{P}_{t+1} = P_t + \hat{Y}_{t+1}$ |
+| **Features** | 47 Causal Candidate Features (returns, volume, spreads, RSI, EMA, MACD, Bollinger) | Pre-computed causal features, filtered by fold/fit PACF return lags |
+| **Inference Engine**| `StandardScaler.transform()` + `Lasso.predict()` | Origin feature extraction + `predict_delta()` + `reconstruct_close()` |
+| **Operational Profile**| Linear dot-product with StandardScaler transform | Bounded deterministic feature extraction |
+| **Artifact Format**| `.joblib` fitted bundle + companion `.metadata.json` | Checksum-verified destination `.joblib` + `.metadata.json` |
 
-**Critical Architectural Advantage:**
-By exporting the PyTorch LSTM network to **ONNX (Open Neural Network Exchange)**, the production Azure VM does not need to install `torch` or `torchvision` (saving $> 1.8\text{ GB}$ of disk and virtual memory). ONNX Runtime provides deterministic, fast, hardware-optimized CPU scoring.
+**Authentic Implementation Invariants:**
+- LIR is NOT a simple 10-price raw regression or Ridge model.
+- Candidate features follow a strict causal taxonomy:
+  - 20 daily return lags (`return_lag_1` to `return_lag_20`)
+  - Rolling return statistics (mean and standard deviation for windows 5, 10, 20)
+  - Volume transformations (`volume_log`, 1-day change, rolling ratios and z-scores for windows 5, 20)
+  - Price-range indicators (`range_pct`, `open_close_spread_pct`, `close_location_in_range`)
+  - Relative moving averages (`close_relative_sma_5`, `10`, `20`)
+  - Technical indicators: RSI (period 14), fast/slow EMA (12, 26), MACD (signal 9, histogram, relatives), Bollinger Bands (window 20, 2 std dev)
+- PACF Return Lag Selection: Selects statistically significant return lags from training returns ($|r_k| > 1.96 / \sqrt{N}$ via Yule-Walker MLE) while retaining all non-return-lag indicators.
+- StandardScaler normalizes features; Scikit-learn `Lasso` fits on normalized features with cyclic coordinate descent and preselected $\alpha$.
+- Reconstructs next-day Close price strictly from origin Close + predicted delta: $\hat{P}_{t+1} = P_t + \Delta_{t+1}$. Rejects non-positive or non-finite prices.
+
+---
+
+### 2.3 Model 3: Long Short-Term Memory (LSTM) — Deferred to Phase 3B
+
+| Property | Research Baseline | Personal Azure Production Design (Phase 3B) |
+| :--- | :--- | :--- |
+| **Model Type** | Univariate Delta LSTM | PyTorch / ONNX Runtime Inference Engine |
+| **Input Shape** | $(N, L, 1)$ sequence of Close price deltas | Sequence of latest Close deltas |
+| **Training Engine**| PyTorch `torch.nn.LSTM` with Adam optimizer | Offline training on development machine |
+| **Inference Engine**| PyTorch state dict or ONNX runtime | Decoupled lightweight inference |
+| **Status in Phase 3A**| **DEFERRED** | **DEFERRED (No PyTorch/TensorFlow in Phase 3A)** |
 
 ---
 
 ## 3. Artifact Storage & Versioning Strategy
 
-Model artifacts are managed hierarchically in Azure Blob Storage:
+Model artifacts are managed in a structured directory layout (`backend/artifacts/models/`):
 
 ```
-azure-blob-storage/
-└── models/
-    ├── v1.0.0/
-    │   ├── manifest.json               # Model hashes, training date, commit
-    │   ├── arima/
-    │   │   ├── ALI_arima.json
-    │   │   └── ... (15 symbols)
-    │   ├── lag_regression/
-    │   │   └── lir_pipeline.joblib
-    │   └── lstm/
-    │       ├── lstm_model.onnx
-    │       └── lstm_scaler.joblib
-    └── v1.1.0/
-        └── ...
+backend/artifacts/models/
+└── <bundle_version>/
+    ├── manifest.json                   # Bundle metadata, file SHAs, source commit
+    ├── ALI/
+    │   ├── lag_regression.joblib       # Fitted LIR wrapper
+    │   ├── lag_regression.metadata.json# Parameters, coefficients, scaler, SHA-256
+    │   ├── arima.joblib                # Fitted ARIMA wrapper
+    │   └── arima.metadata.json         # Order, trend, parameters, fit attempts, SHA-256
+    └── ... (15 symbols)
 ```
 
 ### 3.1 Integrity & Verification Safeguards
-1. **Manifest Checksumming:** Every model directory contains a `manifest.json` with SHA-256 hashes of all weights and parameters.
-2. **Startup Verification:** On API startup, the artifact loader verifies the local cache against the manifest hashes before serving inference traffic.
-3. **Graceful Fallback:** If a model artifact fails validation, the system falls back to the previous verified model version or marks the model provider as `DEGRADED`, preventing application crashes.
+1. **SHA-256 Checksumming:** Every model binary has its cryptographic SHA-256 hash verified against metadata **BEFORE** `joblib.load()` is executed.
+2. **Safe Path Checking:** Artifact paths are verified to remain within designated canonical boundaries, preventing directory traversal attacks.
+3. **Training Boundary Verification:** Historical observations must match the model's `trained_through` date and `data_row_count` before inference is permitted.
+4. **Fail-Closed Loading:** Any tampering, missing file, or metadata mismatch immediately aborts inference without executing unverified serialized code.
 
 ---
 
-## 4. Database Schema & Forecast Provenance
+## 4. Database Model-Artifact Lineage & Forecast Schema
 
-Forecasts are stored transactionally in PostgreSQL:
+Database lineage connects model binaries, execution runs, and forecasts:
 
-```sql
-CREATE TABLE forecast_records (
-    id SERIAL PRIMARY KEY,
-    company_id INTEGER NOT NULL REFERENCES companies(id),
-    model_code VARCHAR(32) NOT NULL,       -- 'ARIMA', 'LAG_REGRESSION', 'LSTM'
-    model_version VARCHAR(32) NOT NULL,    -- 'v1.0.0'
-    forecast_date DATE NOT NULL,           -- Target trade date (t + 1)
-    base_date DATE NOT NULL,               -- Historical reference date (t)
-    predicted_close NUMERIC(12, 4) NOT NULL,
-    lower_bound NUMERIC(12, 4),
-    upper_bound NUMERIC(12, 4),
-    confidence_level NUMERIC(4, 2),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    CONSTRAINT uq_company_model_date UNIQUE (company_id, model_code, model_version, forecast_date)
-);
+```
+┌─────────────────┐       ┌─────────────────┐
+│    companies    │       │ model_metadata  │
+└────────┬────────┘       └────────┬────────┘
+         │                         │
+         │  ┌───────────────────┐  │
+         └──┤  model_artifacts  ├──┘
+            └─────────┬─────────┘
+                      │
+            ┌─────────┴─────────┐
+            │     forecasts     │
+            └───────────────────┘
 ```
 
-### 4.1 Multi-Version Coexistence
-The unique constraint includes `model_version`, allowing multiple model iterations (e.g., `v1.0.0` and `v1.1.0`) to coexist side-by-side. This facilitates:
-- Head-to-head performance comparisons.
-- Live canary deployments.
-- Historical accuracy backtesting against materialized actual closing prices.
+### 4.1 Schema Fields
+- **`model_artifacts` Table (Alembic 0005):**
+  - `id`: UUID primary key
+  - `company_id`: Foreign key to `companies.id`
+  - `model_metadata_id`: Foreign key to `model_metadata.id`
+  - `bundle_version`: e.g. `v1.0.0`
+  - `artifact_format`: `joblib`
+  - `artifact_path`: Relative safe path within artifact storage
+  - `artifact_sha256`: Cryptographic SHA-256 of the binary artifact
+  - `trained_through`: End date of training data
+  - `data_row_count`: Exact row count of training history
+  - `hyperparameters_json`: JSON-encoded model parameters
+  - `source_repository` & `source_commit`: Provenance lineage
+  - `created_at`: Timezone-aware timestamp
+  - `is_active`: Operational activation flag
+
+- **`forecasts` Table Extensions (Alembic 0005):**
+  - `model_artifact_id`: Nullable foreign key to `model_artifacts.id`
+  - `origin_date`: Historical reference date ($t$)
+  - `predicted_delta`: Predicted next-session price change ($P_{t+1} - P_t$)
+  - `target_date`: Target forecast date ($t+1$)
+  - `predicted_price`: Reconstructed close price ($P_t + \Delta$)
 
 ---
 
-## 5. Implementation Roadmap (Phase 3)
+## 5. Implementation Roadmap
 
-1. **Step 1: Offline Export Tooling:** Create an offline pipeline to train and export artifacts (`arima_orders.json`, `lir_pipeline.joblib`, `lstm_model.onnx`).
-2. **Step 2: ONNX Runtime Integration:** Add `onnxruntime` to backend requirements without adding PyTorch.
-3. **Step 3: Inference Pipeline:** Implement `backend/pipeline/forecasting/engine.py` to pull recent prices, score all 15 symbols across the 3 models, and commit to `forecast_records`.
-4. **Step 4: End-to-End Test Suite:** Verify end-to-end forecasting pipeline in CI with mock and real ONNX artifacts.
+1. **Phase 3A (Current):** Real LIR engine, real ARIMA engine, causal feature pipeline, trading calendar, production refit primitives, artifact schema, safe artifact loader, database artifact lineage (Alembic 0005), and smoke testing.
+2. **Phase 3B:** Sourcing authoritative hyperparameter selections, all-15 offline bundle generation, full test evaluation, and production forecast activation.

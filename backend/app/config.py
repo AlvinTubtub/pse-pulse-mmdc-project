@@ -75,20 +75,41 @@ class Settings(BaseSettings):
         default=True,
         description="When true, clearly marks generated or seeded data as demo/development data.",
     )
+    AUTO_CREATE_SCHEMA: bool = Field(
+        default=False,
+        description="Whether to run Base.metadata.create_all() at startup. Defaults to False (Alembic is authoritative). Never allow in production.",
+    )
 
     @model_validator(mode="after")
-    def validate_production_demo_mode(self) -> "Settings":
-        """Fail fast if synthetic demo mode is enabled in production."""
-        if self.ENVIRONMENT.lower() == "production" and self.DEMO_MODE:
-            raise ValueError(
-                "DEMO_MODE must be false when ENVIRONMENT=production. "
-                "Synthetic market data cannot be enabled in production."
-            )
+    def validate_production_guards(self) -> "Settings":
+        """Fail fast if synthetic demo mode or auto schema creation is enabled in production."""
+        if self.ENVIRONMENT.lower() == "production":
+            if self.DEMO_MODE:
+                raise ValueError(
+                    "DEMO_MODE must be false when ENVIRONMENT=production. "
+                    "Synthetic market data cannot be enabled in production."
+                )
+            if self.AUTO_CREATE_SCHEMA:
+                raise ValueError(
+                    "AUTO_CREATE_SCHEMA must be false when ENVIRONMENT=production. "
+                    "Production schema must be managed exclusively through Alembic."
+                )
         return self
+
+    # Real ML Model & Forecasting Controls
+    REAL_MODELS_ENABLED: bool = Field(
+        default=False,
+        description="Gate controlling activation of real model training and inference pipelines in production.",
+    )
+    MODEL_ARTIFACTS_DIR: str = Field(
+        default="backend/artifacts/models",
+        description="Directory for versioned production model artifacts.",
+    )
 
     # Azure Blob Storage Scaffolding (Optional / Scaffolding only)
     AZURE_STORAGE_CONNECTION_STRING: str | None = None
     AZURE_STORAGE_CONTAINER_NAME: str = "pse-pulse-data"
+
 
 
 @lru_cache()

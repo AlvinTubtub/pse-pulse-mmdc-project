@@ -38,18 +38,26 @@ async def lifespan(app: FastAPI):
         logger.info("Demo database seeding disabled.")
         logger.info("Schema must be managed through Alembic.")
     else:
-        logger.info("Non-production environment (%s): initializing schema via create_all...", settings.ENVIRONMENT)
-        Base.metadata.create_all(bind=engine)
+        if settings.AUTO_CREATE_SCHEMA:
+            logger.info("Non-production environment (%s): initializing schema via create_all...", settings.ENVIRONMENT)
+            Base.metadata.create_all(bind=engine)
+        else:
+            logger.info("Non-production environment (%s): Alembic is authoritative for schema. Automatic create_all disabled.", settings.ENVIRONMENT)
 
         if settings.DEMO_MODE:
-            logger.info("DEMO_MODE is True: seeding baseline demo data if database is empty...")
-            db = SessionLocal()
-            try:
-                seed_database_if_empty(db)
-            except Exception as e:
-                logger.error("Error during initial data seed: %s", e)
-            finally:
-                db.close()
+            logger.info("DEMO_MODE is True: checking if database requires baseline seeding...")
+            from sqlalchemy import inspect
+            inspector = inspect(engine)
+            if inspector.has_table("sectors"):
+                db = SessionLocal()
+                try:
+                    seed_database_if_empty(db)
+                except Exception as e:
+                    logger.error("Error during initial data seed: %s", e)
+                finally:
+                    db.close()
+            else:
+                logger.info("Database schema not yet migrated (run 'alembic upgrade head'). Skipping seeding.")
         else:
             logger.info("DEMO_MODE is False: skipping demo data seeding.")
 
