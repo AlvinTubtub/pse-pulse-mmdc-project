@@ -37,8 +37,8 @@ param adminUsername string = 'psepulse'
 @secure()
 param adminSshPublicKey string
 
-@description('CIDR prefix allowed to access SSH (port 22). Must be restricted to administrator IP.')
-param allowedSshSourceIp string = '0.0.0.0/0'
+@description('CIDR prefix allowed to access SSH (port 22). Must be explicitly set to administrator IP CIDR (e.g. 203.0.113.10/32).')
+param allowedSshSourceIp string
 
 @description('PostgreSQL server administrator username.')
 param dbAdminUsername string = 'pseadmin'

@@ -30,17 +30,28 @@ logger = logging.getLogger("pse_pulse")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan: initialize database tables and seed baseline data."""
-    logger.info("Initializing database tables...")
-    Base.metadata.create_all(bind=engine)
+    is_production = settings.ENVIRONMENT.lower() == "production"
 
-    # Seed initial development data
-    db = SessionLocal()
-    try:
-        seed_database_if_empty(db)
-    except Exception as e:
-        logger.error("Error during initial data seed: %s", e)
-    finally:
-        db.close()
+    if is_production:
+        logger.info("Production environment detected.")
+        logger.info("Automatic schema creation disabled.")
+        logger.info("Demo database seeding disabled.")
+        logger.info("Schema must be managed through Alembic.")
+    else:
+        logger.info("Non-production environment (%s): initializing schema via create_all...", settings.ENVIRONMENT)
+        Base.metadata.create_all(bind=engine)
+
+        if settings.DEMO_MODE:
+            logger.info("DEMO_MODE is True: seeding baseline demo data if database is empty...")
+            db = SessionLocal()
+            try:
+                seed_database_if_empty(db)
+            except Exception as e:
+                logger.error("Error during initial data seed: %s", e)
+            finally:
+                db.close()
+        else:
+            logger.info("DEMO_MODE is False: skipping demo data seeding.")
 
     logger.info("Application startup complete. Environment: %s", settings.ENVIRONMENT)
     yield

@@ -38,10 +38,11 @@ sudo mkdir -p /etc/pse-pulse
 sudo chown -R www-data:www-data /var/www/pse-pulse
 sudo chown -R psepulse:psepulse /opt/pse-pulse
 
-echo ">>> [5/7] Configuring UFW Firewall (SSH + HTTP + HTTPS)..."
+echo ">>> [5/7] Configuring UFW Firewall (SSH restricted to SSH_ALLOWED_CIDR + HTTP + HTTPS)..."
+: "${SSH_ALLOWED_CIDR:?Error: Set SSH_ALLOWED_CIDR to your administrator public IP CIDR before running (e.g. export SSH_ALLOWED_CIDR='203.0.113.10/32')}"
 sudo ufw default deny incoming
 sudo ufw default allow outgoing
-sudo ufw allow 22/tcp comment 'SSH'
+sudo ufw allow from "${SSH_ALLOWED_CIDR}" to any port 22 proto tcp comment 'SSH'
 sudo ufw allow 80/tcp comment 'HTTP'
 sudo ufw allow 443/tcp comment 'HTTPS'
 sudo ufw --force enable

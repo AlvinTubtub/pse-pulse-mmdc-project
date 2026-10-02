@@ -40,6 +40,9 @@ coverage.xml
 .env
 .env.*
 !.env.example
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
 
 # Node / Frontend
 frontend/node_modules/

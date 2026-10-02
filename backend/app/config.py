@@ -4,8 +4,9 @@ Uses pydantic-settings for robust environment variable validation and defaults.
 """
 
 from functools import lru_cache
-from typing import List
-from pydantic import Field
+import json
+from typing import List, Union
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,7 +40,8 @@ class Settings(BaseSettings):
 
     # CORS
     # In production, this should be restricted to the exact origin(s).
-    CORS_ORIGINS: List[str] = Field(
+    # Supports comma-separated strings (e.g. "http://a,http://b"), JSON arrays, or native lists.
+    CORS_ORIGINS: Union[List[str], str] = Field(
         default_factory=lambda: [
             "http://localhost:3000",
             "http://127.0.0.1:3000",
@@ -48,11 +50,41 @@ class Settings(BaseSettings):
         ]
     )
 
+    @field_validator("CORS_ORIGINS")
+    @classmethod
+    def assemble_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
+        """Parse CORS origins from comma-separated string, JSON array, or list."""
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return []
+            if v.startswith("[") and v.endswith("]"):
+                try:
+                    parsed = json.loads(v)
+                    if isinstance(parsed, list):
+                        return [str(item).strip() for item in parsed if str(item).strip()]
+                except json.JSONDecodeError:
+                    pass
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        elif isinstance(v, list):
+            return [str(item).strip() for item in v if str(item).strip()]
+        return v
+
     # Development & Demo Controls
     DEMO_MODE: bool = Field(
         default=True,
         description="When true, clearly marks generated or seeded data as demo/development data.",
     )
+
+    @model_validator(mode="after")
+    def validate_production_demo_mode(self) -> "Settings":
+        """Fail fast if synthetic demo mode is enabled in production."""
+        if self.ENVIRONMENT.lower() == "production" and self.DEMO_MODE:
+            raise ValueError(
+                "DEMO_MODE must be false when ENVIRONMENT=production. "
+                "Synthetic market data cannot be enabled in production."
+            )
+        return self
 
     # Azure Blob Storage Scaffolding (Optional / Scaffolding only)
     AZURE_STORAGE_CONNECTION_STRING: str | None = None

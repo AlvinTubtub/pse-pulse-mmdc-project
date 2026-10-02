@@ -6,9 +6,12 @@ on:
   pull_request:
     branches: [ "main" ]
 
+permissions:
+  contents: read
+
 jobs:
   backend-test:
-    name: Backend Tests & Lint
+    name: Backend Tests
     runs-on: ubuntu-latest
 
     steps:
@@ -27,12 +30,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
 
-      - name: Run pytest suite
+      - name: Compile and test backend
         env:
           ENVIRONMENT: test
           DEMO_MODE: "true"
-          DATABASE_URL: sqlite:///:memory:
+          DATABASE_URL: "sqlite:///:memory:"
         run: |
+          python -m compileall backend/app backend/pipeline
           pytest -v
 
   frontend-build:
@@ -65,3 +69,7 @@ jobs:
       - name: Build Next.js static export
         working-directory: frontend
         run: npm run build
+
+      - name: Production dependency security audit
+        working-directory: frontend
+        run: npm audit --omit=dev

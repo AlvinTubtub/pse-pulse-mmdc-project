@@ -74,13 +74,16 @@ sudo bash /tmp/pse-pulse/infrastructure/scripts/setup-vm.sh
 sudo cp /tmp/pse-pulse/.env.example /etc/pse-pulse/.env
 sudo nano /etc/pse-pulse/.env
 ```
-Ensure `DATABASE_URL` is set to the Azure PostgreSQL Flexible Server connection string:
+Ensure `DATABASE_URL` is set to the Azure PostgreSQL Flexible Server connection string and demo mode is strictly disabled:
 ```env
 DATABASE_URL=postgresql+psycopg://pseadmin:<PASSWORD>@psql-pse-pulse-prod-...postgres.database.azure.com:5432/pse_pulse_prod?sslmode=require
 ENVIRONMENT=production
 DEBUG=false
 DEMO_MODE=false
 ```
+> [!CAUTION]
+> **Production Demo-Data Prevention:**
+> `DEMO_MODE` must be `false` when `ENVIRONMENT=production`. The application configuration enforces this with a hard validation failure (`ValueError`), preventing synthetic market records from ever polluting production.
 
 ### Step 4: Set Up Python Backend Virtual Environment
 ```bash
@@ -92,9 +95,17 @@ python3.12 -m venv backend/.venv
 sudo chown -R psepulse:psepulse /opt/pse-pulse
 ```
 
-### Step 5: Run Database Migrations
+### Step 5: Run Database Migrations (Mandatory in Production)
+> [!IMPORTANT]
+> **Production Schema Governance:**
+> In production (`ENVIRONMENT=production`), FastAPI startup intentionally skips `Base.metadata.create_all` and skips demo data seeding when `DEMO_MODE=false`. Alembic is the authoritative and required mechanism for creating and migrating database tables before starting the backend service.
+
 ```bash
 sudo -u psepulse /opt/pse-pulse/backend/.venv/bin/alembic -c /opt/pse-pulse/backend/alembic.ini upgrade head
+```
+Verify that migration completed to `head`:
+```bash
+sudo -u psepulse /opt/pse-pulse/backend/.venv/bin/alembic -c /opt/pse-pulse/backend/alembic.ini current
 ```
 
 ---
@@ -125,11 +136,12 @@ sudo systemctl enable --now pse-pulse-eod.timer
 
 ## 5. Phase D: Frontend Static Export Delivery
 
-Build the static export locally (or in CI) and transfer to the VM:
+Build the static export locally (or in CI) with production environment flags and transfer to the VM:
 ```bash
 cd frontend
 npm ci
-npm run build
+# Build with same-origin API routing and zero synthetic fallbacks:
+NEXT_PUBLIC_API_URL="" NEXT_PUBLIC_DEMO_MODE=false npm run build
 rsync -avz -e "ssh -i ~/.ssh/id_ed25519" out/ psepulse@<VM_PUBLIC_IP>:/tmp/frontend-out/
 ssh -i ~/.ssh/id_ed25519 psepulse@<VM_PUBLIC_IP> "sudo rsync -av --delete /tmp/frontend-out/ /var/www/pse-pulse/out/ && sudo chown -R www-data:www-data /var/www/pse-pulse/out"
 ```
