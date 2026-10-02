@@ -109,3 +109,24 @@ The API endpoint `GET /api/v1/pipeline/status` includes provenance details from 
 > - **Fail-Closed Safety:** In the event of an unparseable or unrecognized format, the parser fails closed (rejects rows or errors out) rather than guessing or fabricating numeric prices.
 > - **No OCR Fallback:** The ingestion engine relies on standard text layer extraction via `pypdf`. Scanned or image-only PDF reports without embedded font text streams cannot be parsed and will fail closed.
 
+---
+
+## 7. Atomic Ingestion Transaction Contract
+
+To protect market data integrity, PSE Pulse enforces strict atomicity across quote ingestion and provenance logging:
+
+### Transaction Boundary
+- **Atomic Persistence:** Upserting tracked `DailyPrice` records and writing the corresponding `MarketDataImport` provenance audit record are bound to a **single database transaction**.
+- **All-or-Nothing Persistence:** If any persistence error occurs while writing `DailyPrice` rows or writing the provenance log, the entire transaction is rolled back via `db.rollback()`. No partial price updates or unlogged price inserts are left behind.
+
+### Failure Handling & Audit
+- **Zero Partial Changes:** On any write or validation failure, exactly 0 partial or orphaned `DailyPrice` changes remain committed.
+- **Operational Audit Log (`PipelineRun`):** The pipeline execution run is updated with `status = "FAILED"`, `records_ingested = 0`, and the complete exception error message. The process exits with a non-zero exit code (`1`).
+- **Isolated Failure Provenance:** An isolated `MarketDataImport` audit entry with `status = "FAILED"` is recorded in an independent transaction to capture the error diagnosis, file SHA-256, and rejection metrics without touching price tables.
+- **Retry Preservation:** Because duplicate file protection filters exclusively by `status = "COMPLETED"`, a recorded `FAILED` import never prevents a subsequent retry of the same file.
+
+### All-or-Nothing Tracked Equities Validation
+- In an EOD session, if any quote record belonging to an **active tracked company** (`Company.is_active == True`) fails financial validation (e.g. invalid OHLC, zero/negative price, NaN/Inf), the entire session is aborted immediately before any database writes.
+- Invalid records for untracked equities are counted as `records_rejected` and discarded without aborting the session for valid tracked securities.
+
+

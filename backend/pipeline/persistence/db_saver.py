@@ -1,6 +1,6 @@
 """Database persistence and storage snapshot scaffold for pipeline runs."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date
 from decimal import Decimal, InvalidOperation
 from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
@@ -129,6 +129,9 @@ class DatabaseSaver:
         sha256_hash: str = "",
         source_filename: str = "",
         dry_run: bool = False,
+        commit: bool = True,
+        records_seen: Optional[int] = None,
+        records_rejected: int = 0,
     ) -> ImportSummary:
         """Persist normalized EOD quotes to daily_prices table with idempotency.
 
@@ -139,6 +142,8 @@ class DatabaseSaver:
         - If (company_id, trade_date) already exists with different OHLCV, values are updated.
         - If new, a new DailyPrice row is inserted.
         - If dry_run is True, transactions are rolled back; zero DB mutations occur.
+        - If commit is False, changes are staged/flushed in session for atomic multi-entity commit.
+        - Database write errors are NOT swallowed; they rollback and re-raise to caller.
         """
         active_companies = (
             self.db.query(Company)
@@ -150,7 +155,9 @@ class DatabaseSaver:
         trade_dt = quotes[0].trade_date if quotes else None
         fname = source_filename or (quotes[0].source_filename if quotes and quotes[0].source_filename else "UNKNOWN")
 
-        records_seen = len(quotes)
+        total_seen = records_seen if records_seen is not None else (len(quotes) + records_rejected)
+        total_valid = len(quotes)
+
         records_tracked = 0
         records_untracked = 0
         records_inserted = 0
@@ -217,8 +224,11 @@ class DatabaseSaver:
             if dry_run:
                 self.db.rollback()
                 status = "DRY_RUN"
-            else:
+            elif commit:
                 self.db.commit()
+                status = "COMPLETED"
+            else:
+                self.db.flush()
                 status = "COMPLETED"
 
             return ImportSummary(
@@ -226,10 +236,10 @@ class DatabaseSaver:
                 source_filename=fname,
                 sha256=sha256_hash,
                 status=status,
-                records_seen=records_seen,
+                records_seen=total_seen,
                 records_tracked=records_tracked,
-                records_valid=records_tracked,
-                records_rejected=0,
+                records_valid=total_valid,
+                records_rejected=records_rejected,
                 records_inserted=records_inserted,
                 records_updated=records_updated,
                 records_unchanged=records_unchanged,
@@ -239,42 +249,78 @@ class DatabaseSaver:
         except Exception as e:
             self.db.rollback()
             logger.error("Failed to persist daily prices: %s", e, exc_info=True)
-            return ImportSummary(
-                trade_date=trade_dt,
-                source_filename=fname,
-                sha256=sha256_hash,
+            raise
+
+    def record_market_data_import(
+        self,
+        summary: ImportSummary,
+        commit: bool = True,
+    ) -> MarketDataImport:
+        """Record provenance audit log in market_data_imports table.
+
+        If commit=False, stages record into existing session transaction for atomic commit.
+        """
+        try:
+            record = MarketDataImport(
+                source_type="PSE_DQR_FILE",
+                source_filename=summary.source_filename,
+                trade_date=summary.trade_date,
+                sha256=summary.sha256,
+                imported_at=datetime.now(timezone.utc),
+                status=summary.status,
+                records_seen=summary.records_seen,
+                records_valid=summary.records_valid,
+                records_inserted=summary.records_inserted,
+                records_updated=summary.records_updated,
+                records_rejected=summary.records_rejected,
+                error_message=summary.error_message,
+            )
+            self.db.add(record)
+            if commit:
+                self.db.commit()
+                self.db.refresh(record)
+            else:
+                self.db.flush()
+            return record
+        except Exception as e:
+            self.db.rollback()
+            logger.error("Failed to record market data import: %s", e, exc_info=True)
+            raise
+
+    def record_failed_import(
+        self,
+        source_filename: str,
+        sha256: str,
+        trade_date: Optional[date] = None,
+        records_seen: int = 0,
+        records_valid: int = 0,
+        records_rejected: int = 0,
+        error_message: Optional[str] = None,
+    ) -> Optional[MarketDataImport]:
+        """Record an operational FAILED import provenance audit entry in its own isolated transaction."""
+        try:
+            record = MarketDataImport(
+                source_type="PSE_DQR_FILE",
+                source_filename=source_filename,
+                trade_date=trade_date,
+                sha256=sha256,
+                imported_at=datetime.now(timezone.utc),
                 status="FAILED",
                 records_seen=records_seen,
-                records_tracked=records_tracked,
-                records_valid=0,
-                records_rejected=0,
+                records_valid=records_valid,
                 records_inserted=0,
                 records_updated=0,
-                records_unchanged=0,
-                records_untracked=records_untracked,
-                error_message=str(e),
+                records_rejected=records_rejected,
+                error_message=error_message,
             )
-
-    def record_market_data_import(self, summary: ImportSummary) -> MarketDataImport:
-        """Record provenance audit log in market_data_imports table."""
-        record = MarketDataImport(
-            source_type="PSE_DQR_FILE",
-            source_filename=summary.source_filename,
-            trade_date=summary.trade_date,
-            sha256=summary.sha256,
-            imported_at=datetime.now(timezone.utc),
-            status=summary.status,
-            records_seen=summary.records_seen,
-            records_valid=summary.records_valid,
-            records_inserted=summary.records_inserted,
-            records_updated=summary.records_updated,
-            records_rejected=summary.records_rejected,
-            error_message=summary.error_message,
-        )
-        self.db.add(record)
-        self.db.commit()
-        self.db.refresh(record)
-        return record
+            self.db.add(record)
+            self.db.commit()
+            self.db.refresh(record)
+            return record
+        except Exception as e:
+            self.db.rollback()
+            logger.warning("Could not persist failed import provenance audit record: %s", e)
+            return None
 
     def get_import_by_sha256(self, sha256_hash: str) -> Optional[MarketDataImport]:
         """Find any previous completed import with this SHA-256 checksum."""

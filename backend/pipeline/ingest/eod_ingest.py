@@ -11,6 +11,7 @@ from typing import List, Dict, Any, Optional, Tuple
 import logging
 from sqlalchemy.orm import Session
 
+from backend.pipeline.ingest.base import EODMarketDataProvider
 from backend.pipeline.ingest.calendar import TradingCalendar
 from backend.pipeline.ingest.models import EODQuote
 from backend.pipeline.ingest.providers.pse_dqr_file import PSEDQRFileProvider
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 class EODIngestionService:
     """Service handling end-of-day market quote ingestion and file management."""
 
-    def __init__(self, provider: Optional[PSEDQRFileProvider] = None):
+    def __init__(self, provider: Optional[EODMarketDataProvider] = None):
         self.provider = provider or PSEDQRFileProvider()
 
     @staticmethod
@@ -35,14 +36,14 @@ class EODIngestionService:
         return hasher.hexdigest()
 
     def check_eod_availability(self, target_date: date) -> bool:
-        """Verify whether PSE market was in session for target date.
+        """Check whether the date is a possible trading day.
 
-        Philippine Stock Exchange trading hours close at 15:00 PHT (UTC+8).
-        Regular trading sessions occur Monday through Friday.
+        Philippine Stock Exchange regular trading sessions occur on weekdays.
+        The definitive signal for a session remains the arrival of an official report.
         """
-        is_trading_day = TradingCalendar.is_possible_trading_day(target_date)
-        logger.info("Checked market session availability for %s: %s", target_date, is_trading_day)
-        return is_trading_day
+        is_possible = TradingCalendar.is_possible_trading_day(target_date)
+        logger.info("Checked possible trading day for %s: %s", target_date, is_possible)
+        return is_possible
 
     def ingest_from_file(
         self,

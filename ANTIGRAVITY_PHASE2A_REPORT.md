@@ -630,3 +630,192 @@ git diff --stat
 ### 25.14 Recommendation
 
 RECOMMENDATION: READY FOR CHATGPT REVIEW BEFORE PHASE 2A COMMIT
+
+---
+
+## 26. Phase 2A.2 — Atomic Ingestion Transaction Safety
+
+### 26.1 Root Cause
+
+Audit of the committed Phase 2A implementation (`1ce36e3`) identified two critical transaction safety defects:
+
+1. **Defect 1 — Prices and Provenance Committed Separately:**
+   `DatabaseSaver.persist_daily_prices()` performed `self.db.commit()` on `daily_prices`. Subsequently, `DatabaseSaver.record_market_data_import()` performed a second independent `self.db.commit()` on `market_data_imports`. A network partition, database crash, or audit failure during the second step left price mutations permanently committed with no corresponding provenance log.
+2. **Defect 2 — Swallowed Persistence Failures:**
+   `persist_daily_prices()` caught database write exceptions internally, swallowed the failure, and returned `ImportSummary(status="FAILED")` without re-raising. `backend/pipeline/runner.py` did not check `summary.status` before proceeding, which permitted write failures to yield `PipelineRun.status = "COMPLETED"` and a misleading exit code `0`.
+
+---
+
+### 26.2 New Transaction Boundary
+
+The transaction lifecycle has been refactored so that market data persistence and provenance logging share a single, atomic database transaction owned by `backend/pipeline/runner.py`:
+
+```mermaid
+flowchart TD
+    A["Parse & Validate Quotes"] --> B{"Tracked Equities Valid?"}
+    B -- No --> C["Rollback & Record FAILED Audit Entry"]
+    C --> D["Set PipelineRun = FAILED, Exit 1"]
+    B -- Yes --> E["DatabaseSaver.persist_daily_prices(commit=False)"]
+    E --> F["self.db.flush() (Stage DailyPrices)"]
+    F --> G["DatabaseSaver.record_market_data_import(commit=False)"]
+    G --> H["self.db.flush() (Stage MarketDataImport)"]
+    H --> I{"Persistence Error?"}
+    I -- Yes --> J["self.db.rollback() (Zero Partial Prices)"]
+    J --> K["DatabaseSaver.record_failed_import() (Isolated Transaction)"]
+    K --> D
+    I -- No --> L["self.db.commit() (ATOMIC COMMIT)"]
+    L --> M["Set PipelineRun = COMPLETED, Exit 0"]
+```
+
+- **Persistence Helper Contracts:** `persist_daily_prices` and `record_market_data_import` accept `commit: bool = True`. When `commit=False`, records are staged via `self.db.flush()` inside the active transaction. If any failure occurs, `self.db.rollback()` is executed and the error is re-raised.
+- **Runner Ownership:** `backend/pipeline/runner.py` stages both entities and calls a single `self.db.commit()`. If an error occurs, `self.db.rollback()` guarantees zero staged rows persist.
+- **Isolated Failure Audit:** Following rollback, `saver.record_failed_import()` writes an isolated provenance record with `status = "FAILED"`, `records_seen`, `records_valid`, `records_rejected`, and the diagnostic error message.
+- **Independent Operational Audit:** `PipelineRun` is created as `RUNNING` before the transaction begins and updated to `COMPLETED` or `FAILED` via `saver.finish_run_record()` upon exit.
+
+---
+
+### 26.3 DailyPrice Failure Injection
+
+- **Test:** `backend/tests/test_dqr_ingest.py::test_runner_daily_price_persistence_failure_rolls_back_atomically`
+- **Methodology:** Monkeypatched `db_session.add` to raise `RuntimeError("Simulated DailyPrice database write failure")` whenever a `DailyPrice` instance is added.
+- **Verification Evidence:**
+  - Pipeline returned exit code: `1` (`!= 0`).
+  - `DailyPrice` rows committed for `2026-10-01`: **0**.
+  - `COMPLETED` `MarketDataImport` rows: **0**.
+  - `PipelineRun.status`: **`FAILED`** (`Simulated DailyPrice database write failure` recorded in `error_message`).
+  - Exactly **1** isolated `MarketDataImport` recorded with `status = "FAILED"`.
+
+---
+
+### 26.4 Provenance Failure Injection
+
+- **Test:** `backend/tests/test_dqr_ingest.py::test_runner_provenance_failure_rolls_back_daily_prices`
+- **Methodology:** Monkeypatched `DatabaseSaver.record_market_data_import` to raise `RuntimeError("Simulated provenance audit write failure")` after `DailyPrice` rows were staged with `commit=False`.
+- **Verification Evidence:**
+  - Pipeline returned exit code: `1` (`!= 0`).
+  - `DailyPrice` delta: **0** (staged daily prices rolled back).
+  - `COMPLETED` `MarketDataImport` delta: **0**.
+  - `PipelineRun.status`: **`FAILED`** (`Simulated provenance audit write failure` recorded).
+  - Exactly **1** isolated `MarketDataImport` recorded with `status = "FAILED"`.
+
+---
+
+### 26.5 Invalid Tracked Record Atomicity
+
+- **Test:** `backend/tests/test_dqr_ingest.py::test_runner_invalid_tracked_record_aborts_session_atomically`
+- **Methodology:** Ingested a session report containing 1 valid tracked symbol (`SMPH`) and 1 malformed tracked symbol (`BDO` with invalid High < Low: High 140.00 vs Low 145.00).
+- **Verification Evidence:**
+  - Pipeline returned exit code: `1` (`!= 0`).
+  - `DailyPrice` rows for `SMPH`: **0** (valid subset was not partially committed).
+  - `DailyPrice` rows for `BDO`: **0**.
+  - `PipelineRun.status`: **`FAILED`** (`Validation failed for tracked equities` recorded).
+  - Exactly **1** `MarketDataImport` recorded with `status = "FAILED"`.
+- **Untracked Equities Tolerance:** Verified via `test_runner_invalid_untracked_record_does_not_abort_tracked_equities` that an invalid quote for an untracked company (`MONDE`) does not abort valid tracked equities (`SMPH` persisted, `records_rejected = 1`, `status = "COMPLETED"`).
+
+---
+
+### 26.6 PipelineRun Failure State
+
+In all failure scenarios (validation faults on tracked equities, database staging errors, commit faults):
+- `PipelineRun.status` is reliably marked as `"FAILED"`.
+- `PipelineRun.error_message` records the root cause string.
+- `PipelineRun.records_ingested` is recorded as `0`.
+- The CLI process exits with non-zero status `1`.
+
+---
+
+### 26.7 Successful Import Regression
+
+- **Automated Tests:** `test_saver_persists_daily_prices`, `test_runner_ingest_only_flag`.
+- **Disposable SQLite Integration Test:**
+  - Pre-import counts: `DailyPrices = 0`, `MarketDataImports = 0`.
+  - Ingested `sample_dqr.txt` with `--ingest-only`.
+  - Post-import counts: `DailyPrices = 4` (delta: +4), `MarketDataImports = 1` (delta: +1, `COMPLETED`).
+  - `PipelineRun`: `COMPLETED`, `records_ingested = 4`, exit code `0`.
+
+---
+
+### 26.8 Duplicate SHA Regression
+
+- **Automated Test:** `test_runner_second_run_duplicate_file_skipped`.
+  - Re-running the identical report file without `--force` logs `ALREADY_IMPORTED / SKIPPED` and adds 0 rows (exit code `0`).
+- **Retry Preservation:** `test_runner_failed_import_does_not_block_subsequent_retry`.
+  - Because `get_import_by_sha256()` checks `status == "COMPLETED"`, a previous `FAILED` import record does not prevent subsequent successful ingestion of the same file once fixed.
+
+---
+
+### 26.9 Production Forecast Safety
+
+- **Automated Test:** `test_runner_production_demo_mode_safety`.
+  - Under `ENVIRONMENT=production` and `DEMO_MODE=false`, market data is persisted while stub forecast models are strictly bypassed.
+  - Total `Forecast` rows generated: **0**.
+  - Total `Forecast` rows persisted: **0**.
+
+---
+
+### 26.10 Tests
+
+```bash
+backend/.venv/bin/python -m compileall backend/app backend/pipeline backend/tests
+backend/.venv/bin/pytest -v backend/tests
+backend/.venv/bin/pip check
+```
+
+**Results:**
+- Compileall: 0 compilation errors across all modules.
+- Pytest: **60 passed in 0.71s** (increased from 55 to 60 with atomic transaction and failure-injection tests).
+- Pip check: `No broken requirements found.`
+
+---
+
+### 26.11 Frontend Regression
+
+```bash
+cd frontend
+npm run lint
+npx tsc --noEmit
+npm run build
+npm audit --omit=dev
+```
+
+**Results:**
+- `eslint .`: 0 errors, 0 warnings.
+- `npx tsc --noEmit`: 0 type errors.
+- `next build`: 16/16 static pages generated successfully.
+- `npm audit --omit=dev`: `found 0 vulnerabilities`.
+
+---
+
+### 26.12 Git State
+
+```bash
+git status --short
+```
+```text
+ M ANTIGRAVITY_PHASE2A_REPORT.md
+ M backend/pipeline/ingest/eod_ingest.py
+ M backend/pipeline/persistence/db_saver.py
+ M backend/pipeline/runner.py
+ M backend/tests/test_dqr_ingest.py
+ M docs/data-ingestion.md
+```
+
+```bash
+git diff --stat
+```
+```text
+ ANTIGRAVITY_PHASE2A_REPORT.md            | 189 +++++++++++++++++++++++++++++
+ backend/pipeline/ingest/eod_ingest.py    |  15 +--
+ backend/pipeline/persistence/db_saver.py | 120 +++++++++++++------
+ backend/pipeline/runner.py               |  85 ++++++++++---
+ backend/tests/test_dqr_ingest.py         | 197 +++++++++++++++++++++++++++++++
+ docs/data-ingestion.md                   |  21 ++++
+ 6 files changed, 566 insertions(+), 61 deletions(-)
+```
+
+---
+
+### 26.13 Recommendation
+
+RECOMMENDATION: READY FOR CHATGPT REVIEW BEFORE PHASE 2A.2 COMMIT
+

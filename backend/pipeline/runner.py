@@ -170,14 +170,74 @@ def run_pipeline(
                 len(invalid_records),
             )
 
-            # Step 3: Persistence to daily_prices
-            import_summary = saver.persist_daily_prices(
-                quotes=valid_quotes,
-                sha256_hash=sha256_hash,
-                source_filename=source_path.name,
-                dry_run=dry_run,
-            )
-            import_summary.records_rejected = len(invalid_records)
+            # Step 2b: Enforce All-or-Nothing policy for tracked equities
+            active_companies = db.query(Company).filter(Company.is_active == True).all()
+            tracked_symbols = {c.symbol.upper() for c in active_companies}
+
+            invalid_tracked = []
+            for inv in invalid_records:
+                inv_sym = str(inv.get("symbol", "")).strip().upper()
+                if inv_sym in tracked_symbols:
+                    invalid_tracked.append((inv_sym, inv.get("validation_errors", [])))
+
+            if invalid_tracked:
+                err_details = "; ".join(f"{s}: {','.join(errs)}" for s, errs in invalid_tracked)
+                msg = (
+                    f"Validation failed for tracked equities ({len(invalid_tracked)} invalid): {err_details}. "
+                    "Aborting market data session to preserve data integrity."
+                )
+                logger.error(msg)
+                if not dry_run:
+                    saver.record_failed_import(
+                        source_filename=source_path.name,
+                        sha256=sha256_hash,
+                        trade_date=trade_date or (raw_quotes[0].trade_date if raw_quotes else None),
+                        records_seen=len(raw_quotes),
+                        records_valid=len(valid_quotes),
+                        records_rejected=len(invalid_records),
+                        error_message=msg,
+                    )
+                raise ValueError(msg)
+
+            # Step 3: Atomic Persistence (DailyPrice + MarketDataImport in ONE transaction)
+            try:
+                import_summary = saver.persist_daily_prices(
+                    quotes=valid_quotes,
+                    sha256_hash=sha256_hash,
+                    source_filename=source_path.name,
+                    dry_run=dry_run,
+                    commit=False,  # Stage daily prices without committing!
+                    records_seen=len(raw_quotes),
+                    records_rejected=len(invalid_records),
+                )
+
+                if not dry_run:
+                    audit_record = saver.record_market_data_import(
+                        summary=import_summary,
+                        commit=False,  # Stage audit record into same transaction!
+                    )
+                    db.commit()  # ATOMIC COMMIT of DailyPrice + MarketDataImport together!
+                    logger.info(
+                        "Atomically committed market data import ID %d (SHA-256: %s...)",
+                        audit_record.id,
+                        audit_record.sha256[:12],
+                    )
+                else:
+                    db.rollback()  # Dry run guarantees zero DB mutation
+            except Exception as persist_err:
+                db.rollback()
+                logger.error("Transaction failed during market data persistence: %s", persist_err, exc_info=True)
+                if not dry_run:
+                    saver.record_failed_import(
+                        source_filename=source_path.name,
+                        sha256=sha256_hash,
+                        trade_date=trade_date or (raw_quotes[0].trade_date if raw_quotes else None),
+                        records_seen=len(raw_quotes),
+                        records_valid=len(valid_quotes),
+                        records_rejected=len(invalid_records),
+                        error_message=str(persist_err),
+                    )
+                raise
 
             total_ingested = import_summary.records_inserted + import_summary.records_updated
 
@@ -190,15 +250,6 @@ def run_pipeline(
                 import_summary.records_unchanged,
                 import_summary.records_untracked,
             )
-
-            # Record provenance in market_data_imports
-            if not dry_run:
-                audit_record = saver.record_market_data_import(import_summary)
-                logger.info(
-                    "Recorded market data import audit entry ID: %d (SHA-256: %s...)",
-                    audit_record.id,
-                    audit_record.sha256[:12],
-                )
         else:
             logger.info("No source file provided or detected in data/incoming. Ingestion step skipped.")
 

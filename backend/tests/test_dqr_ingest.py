@@ -514,3 +514,200 @@ def test_pipeline_status_endpoint_reports_import_provenance(client, db_session: 
     assert imp["source_filename"] == "sample_dqr.txt"
     assert imp["records_inserted"] == 4
     assert imp["status"] == "COMPLETED"
+
+
+# ==============================================================================
+# 7. ATOMIC TRANSACTION & FAILURE-INJECTION TESTS (PHASE 2A.2)
+# ==============================================================================
+
+def test_runner_daily_price_persistence_failure_rolls_back_atomically(db_session: Session, monkeypatch):
+    """Verify failure during DailyPrice persistence rolls back transaction, leaving zero rows."""
+    orig_add = db_session.add
+
+    def failing_add(instance):
+        if isinstance(instance, DailyPrice):
+            raise RuntimeError("Simulated DailyPrice database write failure")
+        return orig_add(instance)
+
+    monkeypatch.setattr(db_session, "add", failing_add)
+
+    exit_code = run_pipeline(
+        source_file=TXT_FIXTURE,
+        trade_date=date(2026, 10, 1),
+        ingest_only=True,
+        db=db_session,
+    )
+
+    assert exit_code != 0
+    # Zero DailyPrice rows committed
+    price_count = db_session.query(DailyPrice).filter(DailyPrice.trade_date == date(2026, 10, 1)).count()
+    assert price_count == 0
+
+    # Zero COMPLETED MarketDataImport rows
+    completed_imports = db_session.query(MarketDataImport).filter(MarketDataImport.status == "COMPLETED").count()
+    assert completed_imports == 0
+
+    # PipelineRun must be recorded as FAILED
+    latest_run = db_session.query(PipelineRun).order_by(PipelineRun.id.desc()).first()
+    assert latest_run is not None
+    assert latest_run.status == "FAILED"
+    assert "Simulated DailyPrice database write failure" in (latest_run.error_message or "")
+
+    # Exactly one FAILED import audit record
+    failed_imports = db_session.query(MarketDataImport).filter(MarketDataImport.status == "FAILED").all()
+    assert len(failed_imports) == 1
+    assert "Simulated DailyPrice database write failure" in (failed_imports[0].error_message or "")
+
+
+def test_runner_provenance_failure_rolls_back_daily_prices(db_session: Session, monkeypatch):
+    """Verify provenance failure rolls back staged DailyPrice records atomically."""
+    def failing_record_market_data_import(self, summary, commit=True):
+        raise RuntimeError("Simulated provenance audit write failure")
+
+    monkeypatch.setattr(DatabaseSaver, "record_market_data_import", failing_record_market_data_import)
+
+    exit_code = run_pipeline(
+        source_file=TXT_FIXTURE,
+        trade_date=date(2026, 10, 1),
+        ingest_only=True,
+        db=db_session,
+    )
+
+    assert exit_code != 0
+
+    # DailyPrice delta must be 0 (staged prices were rolled back)
+    price_count = db_session.query(DailyPrice).filter(DailyPrice.trade_date == date(2026, 10, 1)).count()
+    assert price_count == 0
+
+    # COMPLETED provenance delta must be 0
+    completed_imports = db_session.query(MarketDataImport).filter(MarketDataImport.status == "COMPLETED").count()
+    assert completed_imports == 0
+
+    # PipelineRun must be recorded as FAILED
+    latest_run = db_session.query(PipelineRun).order_by(PipelineRun.id.desc()).first()
+    assert latest_run is not None
+    assert latest_run.status == "FAILED"
+    assert "Simulated provenance audit write failure" in (latest_run.error_message or "")
+
+    # FAILED import provenance recorded
+    failed_imports = db_session.query(MarketDataImport).filter(MarketDataImport.status == "FAILED").all()
+    assert len(failed_imports) == 1
+    assert "Simulated provenance audit write failure" in (failed_imports[0].error_message or "")
+
+
+def test_runner_invalid_tracked_record_aborts_session_atomically(db_session: Session, tmp_path: Path):
+    """Verify invalid quote for a tracked company aborts entire market-data session."""
+    # SMPH is valid, but BDO has High (140.00) < Low (145.00)
+    dqr_content = (
+        "THE PHILIPPINE STOCK EXCHANGE, INC.\n"
+        "DAILY QUOTATION REPORT\n"
+        "October 1, 2026\n\n"
+        "SYMBOL BID ASK OPEN HIGH LOW CLOSE VOLUME VALUE\n"
+        "SMPH 28.40 28.50 28.20 28.80 28.00 28.60 1,250,000 35,625,000\n"
+        "BDO 141.50 142.00 141.00 140.00 145.00 142.00 650,000 92,300,000\n"
+    )
+    bad_fixture = tmp_path / "dqr_invalid_tracked.txt"
+    bad_fixture.write_text(dqr_content)
+
+    exit_code = run_pipeline(
+        source_file=bad_fixture,
+        trade_date=date(2026, 10, 1),
+        ingest_only=True,
+        db=db_session,
+    )
+
+    assert exit_code != 0
+
+    # Zero DailyPrice rows committed for both SMPH and BDO
+    smph = db_session.query(Company).filter(Company.symbol == "SMPH").first()
+    bdo = db_session.query(Company).filter(Company.symbol == "BDO").first()
+    p_smph = db_session.query(DailyPrice).filter(DailyPrice.company_id == smph.id, DailyPrice.trade_date == date(2026, 10, 1)).count()
+    p_bdo = db_session.query(DailyPrice).filter(DailyPrice.company_id == bdo.id, DailyPrice.trade_date == date(2026, 10, 1)).count()
+    assert p_smph == 0
+    assert p_bdo == 0
+
+    # PipelineRun must be FAILED
+    latest_run = db_session.query(PipelineRun).order_by(PipelineRun.id.desc()).first()
+    assert latest_run is not None
+    assert latest_run.status == "FAILED"
+    assert "Validation failed for tracked equities" in (latest_run.error_message or "")
+
+    # FAILED provenance recorded
+    failed_imports = db_session.query(MarketDataImport).filter(MarketDataImport.status == "FAILED").all()
+    assert len(failed_imports) == 1
+    assert "Validation failed for tracked equities" in (failed_imports[0].error_message or "")
+
+
+def test_runner_invalid_untracked_record_does_not_abort_tracked_equities(db_session: Session, tmp_path: Path):
+    """Verify invalid quote for untracked company does NOT abort valid tracked imports."""
+    # SMPH is tracked & valid. MONDE is untracked & invalid (High 9.00 < Low 10.00)
+    dqr_content = (
+        "THE PHILIPPINE STOCK EXCHANGE, INC.\n"
+        "DAILY QUOTATION REPORT\n"
+        "October 1, 2026\n\n"
+        "SYMBOL BID ASK OPEN HIGH LOW CLOSE VOLUME VALUE\n"
+        "SMPH 28.40 28.50 28.20 28.80 28.00 28.60 1,250,000 35,625,000\n"
+        "MONDE 9.50 9.60 9.45 9.00 10.00 9.65 300,000 2,880,000\n"
+    )
+    untracked_bad = tmp_path / "dqr_untracked_bad.txt"
+    untracked_bad.write_text(dqr_content)
+
+    exit_code = run_pipeline(
+        source_file=untracked_bad,
+        trade_date=date(2026, 10, 1),
+        ingest_only=True,
+        db=db_session,
+    )
+
+    assert exit_code == 0
+
+    # SMPH should be persisted successfully
+    smph = db_session.query(Company).filter(Company.symbol == "SMPH").first()
+    p_smph = db_session.query(DailyPrice).filter(DailyPrice.company_id == smph.id, DailyPrice.trade_date == date(2026, 10, 1)).count()
+    assert p_smph == 1
+
+    # COMPLETED import recorded with records_rejected=1
+    latest_import = db_session.query(MarketDataImport).filter(MarketDataImport.status == "COMPLETED").first()
+    assert latest_import is not None
+    assert latest_import.records_seen == 2
+    assert latest_import.records_valid == 1
+    assert latest_import.records_rejected == 1
+
+
+def test_runner_failed_import_does_not_block_subsequent_retry(db_session: Session, monkeypatch):
+    """Verify a previous FAILED import does not trigger duplicate skipping on retry."""
+    # 1. First run fails due to injected error
+    def failing_import(self, summary, commit=True):
+        raise RuntimeError("Transient error on first run")
+
+    monkeypatch.setattr(DatabaseSaver, "record_market_data_import", failing_import)
+
+    exit_code1 = run_pipeline(
+        source_file=TXT_FIXTURE,
+        trade_date=date(2026, 10, 1),
+        ingest_only=True,
+        db=db_session,
+    )
+    assert exit_code1 != 0
+
+    # 1 FAILED record exists, 0 COMPLETED
+    assert db_session.query(MarketDataImport).filter(MarketDataImport.status == "FAILED").count() == 1
+    assert db_session.query(MarketDataImport).filter(MarketDataImport.status == "COMPLETED").count() == 0
+    assert db_session.query(DailyPrice).filter(DailyPrice.trade_date == date(2026, 10, 1)).count() == 0
+
+    # 2. Undo monkeypatch and retry same file
+    monkeypatch.undo()
+
+    exit_code2 = run_pipeline(
+        source_file=TXT_FIXTURE,
+        trade_date=date(2026, 10, 1),
+        ingest_only=True,
+        db=db_session,
+    )
+    assert exit_code2 == 0
+
+    # Prices should now be committed
+    assert db_session.query(DailyPrice).filter(DailyPrice.trade_date == date(2026, 10, 1)).count() == 4
+    # COMPLETED record exists
+    assert db_session.query(MarketDataImport).filter(MarketDataImport.status == "COMPLETED").count() == 1
+
