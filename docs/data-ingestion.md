@@ -131,27 +131,39 @@ To protect market data integrity, PSE Pulse enforces strict atomicity across quo
 
 ---
 
-## 8. Historical OHLCV Bootstrap Pipeline (Phase 2B)
+## 8. Historical OHLCV Bootstrap Pipeline (Phase 2B & 2B.2)
 
-In addition to daily EOD reports, PSE Pulse supports an atomic historical bootstrap pipeline capable of importing 2020-2026 historical daily OHLCV datasets from official research repository CSV exports.
+In addition to daily EOD reports, PSE Pulse supports an atomic historical bootstrap pipeline capable of importing 2020–2026 historical daily OHLCV datasets from the official research repository with fail-closed provenance verification.
 
-### 8.1 CLI Usage
+### 8.1 Fail-Closed Provenance Verification Gates
+
+Before reading or staging any historical records into the database, `OfficialSourceVerifier` enforces four mandatory integrity gates:
+
+1. **Repository Root & Canonical Path Gate:** The input directory must resolve strictly to the root of a valid Git repository (`git rev-parse --show-toplevel`), and the raw data directory must reside at canonical location `<source_root>/backend/data/raw`. Arbitrary caller directories are rejected.
+2. **Git Commit Gate:** The checked-out Git HEAD (`git rev-parse HEAD`) must match the exact pinned official commit (`b8bf39f8e94729687c2e877dc164ea8a4f69e2b1`).
+3. **Clean Worktree Gate:** The source repository working tree must be completely clean (`git status --porcelain=v1` must return empty output). Any modified, untracked, or staged files cause immediate failure.
+4. **Committed Manifest & SHA-256 Gate:** The destination project's committed manifest (`backend/bootstrap-manifests/official_repo_b8bf39f_manifest.json`) is validated for commit parity, repository URL parity, and exactly 15 canonical symbols. All 15 source raw CSV files must match the authoritative SHA-256 hashes and row counts recorded in the manifest.
+
+Database provenance is fail-closed and cannot be stamped without satisfying all four gates.
+
+### 8.2 CLI Usage
 
 ```bash
-# Dry run: parse, validate, and check conflict state without writing to DB
-python -m backend.pipeline.runner --bootstrap-dir /path/to/official/data/raw --dry-run
+# Dry run: verify source provenance and simulate bootstrap without writing to DB
+python -m backend.pipeline.runner --bootstrap-source-root /path/to/official/source --dry-run
 
 # Execute atomic all-or-nothing historical bootstrap across all 15 symbols
-python -m backend.pipeline.runner --bootstrap-dir /path/to/official/data/raw
+python -m backend.pipeline.runner --bootstrap-source-root /path/to/official/source
 
 # Direct invocation of bootstrap CLI module
-python -m backend.pipeline.bootstrap.cli --bootstrap-dir /path/to/official/data/raw
+python -m backend.pipeline.bootstrap.cli --source-root /path/to/official/source --dry-run
 ```
 
-### 8.2 Architectural Guarantees
+### 8.3 Architectural Guarantees
 
-1. **All-or-Nothing Transaction:** The bootstrap service loads, parses, and validates all 15 symbols before writing to the database. Insertion is wrapped in a single database transaction; any validation failure or pricing conflict rolls back the entire universe.
-2. **Conflict Detection (`HistoricalPriceConflictError`):** If an existing `daily_prices` record for any `(company_id, trade_date)` has conflicting OHLCV values compared to the bootstrap file, the pipeline aborts immediately to avoid silent data overwrites.
-3. **Idempotency:** Re-executing against an already populated database reports `0 inserted, 0 updated, 24,735 unchanged` and creates zero duplicate rows.
-4. **Exact Fractional Volume Fidelity:** Eliminates all rounding by migrating `daily_prices.volume` to `Numeric(20, 4)` via Alembic revision `0004_change_daily_price_volume_to_numeric`. All 28 fractional banking volume records are preserved with 100% precision directly from source Decimal representations.
-5. **Alembic 0003 Provenance Tracking:** Each company's import is logged in `market_data_imports` with `source_type="historical_bootstrap"`, `source_repository`, `source_commit`, `source_path`, `symbol`, `file_hash`, `first_trade_date`, `last_trade_date`, and `records_unchanged`.
+1. **Pre-Verification Before Database Connection:** The source repository is validated in memory and checked against Git metadata and file hashes before opening any transaction or modifying company/sector tables.
+2. **All-or-Nothing Transaction:** The bootstrap service loads, parses, and validates all 15 symbols before writing to the database. Insertion is wrapped in a single database transaction; any validation failure or pricing conflict rolls back the entire universe.
+3. **Conflict Detection (`HistoricalPriceConflictError`):** If an existing `daily_prices` record for any `(company_id, trade_date)` has conflicting OHLCV values compared to the bootstrap file, the pipeline aborts immediately to avoid silent data overwrites.
+4. **Idempotency:** Re-executing against an already populated database reports `0 inserted, 0 updated, 24,735 unchanged` and creates zero duplicate rows.
+5. **Exact Fractional Volume Fidelity:** Eliminates all rounding by migrating `daily_prices.volume` to `Numeric(20, 4)` via Alembic revision `0004_change_daily_price_volume_to_numeric`. All 28 fractional banking volume records are preserved with 100% precision directly from source Decimal representations.
+6. **Alembic 0003 Provenance Tracking:** Each company's import is logged in `market_data_imports` with `source_type="OFFICIAL_REPO_BOOTSTRAP"`, `source_repository`, `source_commit`, `source_path`, `symbol`, `sha256`, `first_trade_date`, `last_trade_date`, and `records_unchanged` stamped directly from the verified source container.

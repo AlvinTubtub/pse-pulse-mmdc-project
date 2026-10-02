@@ -18,15 +18,15 @@
 Phase 2B and 2B.1 establish the official backend port and 100% source-fidelity historical OHLCV data bootstrap for **PSE Pulse — Personal Azure Edition**. Building directly upon the atomic EOD market data ingestion foundation from Phase 2A and 2A.2, this phase ports the canonical 15-company domain model across exactly **5 sectors** and implements an atomic, idempotent, all-or-nothing historical data bootstrap engine capable of importing the complete 2020–2026 daily OHLCV dataset from the pinned official Capstone research repository.
 
 Key milestones achieved in Phase 2B & 2B.1:
-1. **Canonical 15-Company Domain Module:** Defined the canonical universe of 15 PSE equities across exactly **5 sectors** in [`backend/app/domain/company_universe.py`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/backend/app/domain/company_universe.py).
-2. **Company & Sector Idempotent Synchronization:** Implemented [`backend/app/services/company_sync.py`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/backend/app/services/company_sync.py) to synchronize companies, activate the 15 official equities, and automatically deactivate any obsolete demo companies (guaranteeing exactly 15 active companies in the system).
-3. **Volume Type Migration (Alembic 0004):** Migrated `daily_prices.volume` from `BigInteger` to `Numeric(20, 4)` via [`backend/alembic/versions/0004_change_daily_price_volume_to_numeric.py`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/backend/alembic/versions/0004_change_daily_price_volume_to_numeric.py) with full SQLite batch alteration and PostgreSQL compatibility.
+1. **Canonical 15-Company Domain Module:** Defined the canonical universe of 15 PSE equities across exactly **5 sectors** in [`backend/app/domain/company_universe.py`](backend/app/domain/company_universe.py).
+2. **Company & Sector Idempotent Synchronization:** Implemented [`backend/app/services/company_sync.py`](backend/app/services/company_sync.py) to synchronize companies, activate the 15 official equities, and automatically deactivate any obsolete demo companies (guaranteeing exactly 15 active companies in the system).
+3. **Volume Type Migration (Alembic 0004):** Migrated `daily_prices.volume` from `BigInteger` to `Numeric(20, 4)` via [`backend/alembic/versions/0004_change_daily_price_volume_to_numeric.py`](backend/alembic/versions/0004_change_daily_price_volume_to_numeric.py) with full SQLite batch alteration and PostgreSQL compatibility.
 4. **Zero-Rounding Exact Fractional Volume Fidelity:** Removed all in-memory rounding. Raw CSV volumes are parsed directly from strings via `Decimal(raw_value.strip())`. All 28 fractional volume rows ending in `.5` from the source repository are preserved with exact mathematical fidelity.
-5. **Database Schema Extension (Alembic 0003):** Authored migration [`backend/alembic/versions/0003_add_historical_bootstrap_provenance.py`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/backend/alembic/versions/0003_add_historical_bootstrap_provenance.py) extending `market_data_imports` with repository, commit, file path, symbol, date range, and unchanged record counters.
-6. **Atomic Historical Bootstrap Engine:** Created [`backend/pipeline/bootstrap/`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/backend/pipeline/bootstrap/) with `OfficialRepoHistoricalProvider`, `HistoricalBootstrapService`, and CLI runner integration (`--bootstrap-dir`).
+5. **Database Schema Extension (Alembic 0003):** Authored migration [`backend/alembic/versions/0003_add_historical_bootstrap_provenance.py`](backend/alembic/versions/0003_add_historical_bootstrap_provenance.py) extending `market_data_imports` with repository, commit, file path, symbol, date range, and unchanged record counters.
+6. **Atomic Historical Bootstrap Engine:** Created [`backend/pipeline/bootstrap/`](backend/pipeline/bootstrap/) with `OfficialRepoHistoricalProvider`, `HistoricalBootstrapService`, and CLI runner integration (`--bootstrap-dir`).
 7. **All-or-Nothing & Conflict Safety:** Enforced full universe pre-validation and single-transaction execution. Any row validation failure or pricing conflict triggers immediate rollback (`HistoricalPriceConflictError`), preventing partial or conflicting data persistence.
 8. **Whole-Dataset Parity:** Verified all 24,735 historical rows (1,649 sessions across 15 symbols) against the database: **0 OHLC mismatches, 0 Volume mismatches, 0 Date mismatches, 0 duplicate groups**.
-9. **Machine-Readable Manifest:** Generated [`backend/bootstrap-manifests/official_repo_b8bf39f_manifest.json`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/backend/bootstrap-manifests/official_repo_b8bf39f_manifest.json) recording SHA-256 hashes of untouched raw files.
+9. **Machine-Readable Manifest:** Generated [`backend/bootstrap-manifests/official_repo_b8bf39f_manifest.json`](backend/bootstrap-manifests/official_repo_b8bf39f_manifest.json) recording SHA-256 hashes of untouched raw files.
 10. **Test Suite Expansion:** Expanded pytest suite from 60 to **76 passing unit tests** (100% pass rate in < 0.7s), with `python -m compileall` passing with zero errors and `pip check` reporting no broken requirements.
 11. **Frontend Verification:** Validated Next.js frontend with 26 statically exported routes, 0 TypeScript errors, 0 ESLint warnings, and 0 production security vulnerabilities.
 
@@ -106,7 +106,7 @@ git -C /tmp/pse-pulse-official-source diff --cached --exit-code
 
 ## 6. Official Backend Porting Matrix Summary
 
-The official backend contains 38 Python source files, 15 scripts, and numerous research artifacts. These were cataloged in [`docs/official-backend-porting-matrix.md`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/docs/official-backend-porting-matrix.md) across five disposition categories:
+The official backend contains 38 Python source files, 15 scripts, and numerous research artifacts. These were cataloged in [`docs/official-backend-porting-matrix.md`](docs/official-backend-porting-matrix.md) across five disposition categories:
 
 | Disposition | Count | Core Components |
 | :--- | :---: | :--- |
@@ -138,7 +138,7 @@ The raw data validator's volume contract was updated in the matrix to specify: *
 
 ## 8. Canonical 15-Company Universe Definition
 
-The canonical universe is established in [`backend/app/domain/company_universe.py`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/backend/app/domain/company_universe.py) using frozen Pydantic domain models:
+The canonical universe is established in [`backend/app/domain/company_universe.py`](backend/app/domain/company_universe.py) using frozen Pydantic domain models:
 
 The 15 canonical equities are:
 1. `ALI` — Ayala Land, Inc. (Property)
@@ -183,7 +183,7 @@ set(company.sector for company in OFFICIAL_15_COMPANIES) == {
 
 ## 10. Volume Type Migration (Alembic Revision 0004)
 
-Authored [`backend/alembic/versions/0004_change_daily_price_volume_to_numeric.py`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/backend/alembic/versions/0004_change_daily_price_volume_to_numeric.py):
+Authored [`backend/alembic/versions/0004_change_daily_price_volume_to_numeric.py`](backend/alembic/versions/0004_change_daily_price_volume_to_numeric.py):
 - Replaces `BigInteger` with `Numeric(20, 4)` for `daily_prices.volume`.
 - Uses Alembic `batch_alter_table` for 100% SQLite development compatibility and PostgreSQL production compatibility.
 - Tested bidirectionally:
@@ -191,7 +191,7 @@ Authored [`backend/alembic/versions/0004_change_daily_price_volume_to_numeric.py
   - Downgrade: `0004 -> 0003` (PASS)
   - Full cycle from base: `base -> 0001 -> 0002 -> 0003 -> 0004` (PASS)
 
-SQLAlchemy model [`backend/app/models/price.py`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/backend/app/models/price.py) was updated:
+SQLAlchemy model [`backend/app/models/price.py`](backend/app/models/price.py) was updated:
 ```python
 volume = Column(Numeric(20, 4), nullable=False, default=0)
 ```
@@ -200,7 +200,7 @@ volume = Column(Numeric(20, 4), nullable=False, default=0)
 
 ## 11. Company & Sector Idempotent Synchronization & Legacy Deactivation
 
-Implemented in [`backend/app/services/company_sync.py`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/backend/app/services/company_sync.py):
+Implemented in [`backend/app/services/company_sync.py`](backend/app/services/company_sync.py):
 - Syncs the 5 canonical sectors into the `sectors` table.
 - Upserts the 15 canonical companies with `is_active = True`.
 - **Obsolete Deactivation:** Explicitly queries for any active companies not in the canonical universe (`BDO`, `TEL`, `AC`) and deactivates them (`is_active = False`).
@@ -210,7 +210,7 @@ Implemented in [`backend/app/services/company_sync.py`](file:///Users/alvintubtu
 
 ## 12. Historical Bootstrap Architecture & Ingestion Design
 
-Implemented in [`backend/pipeline/bootstrap/`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/backend/pipeline/bootstrap/):
+Implemented in [`backend/pipeline/bootstrap/`](backend/pipeline/bootstrap/):
 - **`models.py`:** `HistoricalQuote` updated with `volume: Decimal`.
 - **`official_repo_csv.py` (`OfficialRepoHistoricalProvider`):** Direct string parsing via `Decimal(raw_value.strip())`. Finite non-negative check (`vol_d >= 0`). Zero rounding or casting.
 - **`service.py` (`HistoricalBootstrapService`):** All-or-nothing multi-file load, conflict detection comparing `Decimal` values via `_dec_equal`, single-transaction atomic persistence.
@@ -318,7 +318,7 @@ Every row across all 15 source files was verified against the database:
 
 ## 19. Bootstrap Manifest Specification
 
-Generated at [`backend/bootstrap-manifests/official_repo_b8bf39f_manifest.json`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/backend/bootstrap-manifests/official_repo_b8bf39f_manifest.json):
+Generated at [`backend/bootstrap-manifests/official_repo_b8bf39f_manifest.json`](backend/bootstrap-manifests/official_repo_b8bf39f_manifest.json):
 - Points to `source_commit = b8bf39f8e94729687c2e877dc164ea8a4f69e2b1`.
 - Contains hashes of untouched source files.
 
@@ -402,7 +402,7 @@ Added `--bootstrap-dir` parameter to `backend/pipeline/runner.py`.
 
 ## 28. Frontend 15-Company Universe Alignment
 
-`FALLBACK_COMPANIES` in [`frontend/src/lib/api.ts`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/frontend/src/lib/api.ts) matches the 15 canonical companies.
+`FALLBACK_COMPANIES` in [`frontend/src/lib/api.ts`](frontend/src/lib/api.ts) matches the 15 canonical companies.
 
 ---
 
@@ -433,7 +433,7 @@ Suite expanded to **76 passing tests** (< 0.7s execution time).
 
 ## 32. Production Runtime Model Decoupling Plan
 
-Detailed in [`docs/model-porting-plan.md`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/docs/model-porting-plan.md).
+Detailed in [`docs/model-porting-plan.md`](docs/model-porting-plan.md).
 
 ---
 
@@ -451,12 +451,12 @@ Inference pipelines score using pre-fitted parameters, regression pipelines, and
 
 ## 35. Documentation Updates Summary
 
-- [`docs/official-backend-porting-matrix.md`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/docs/official-backend-porting-matrix.md)
-- [`docs/historical-bootstrap-audit.md`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/docs/historical-bootstrap-audit.md)
-- [`docs/model-porting-plan.md`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/docs/model-porting-plan.md)
-- [`README.md`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/README.md)
-- [`docs/architecture.md`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/docs/architecture.md)
-- [`docs/data-ingestion.md`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/docs/data-ingestion.md)
+- [`docs/official-backend-porting-matrix.md`](docs/official-backend-porting-matrix.md)
+- [`docs/historical-bootstrap-audit.md`](docs/historical-bootstrap-audit.md)
+- [`docs/model-porting-plan.md`](docs/model-porting-plan.md)
+- [`README.md`](README.md)
+- [`docs/architecture.md`](docs/architecture.md)
+- [`docs/data-ingestion.md`](docs/data-ingestion.md)
 
 ---
 
@@ -498,6 +498,20 @@ No staging, no commits, no pushes.
 
 ---
 
-## 37. Final Recommendation & Sign-Off
+---
 
-RECOMMENDATION: READY FOR CHATGPT REVIEW BEFORE PHASE 2B COMMIT
+## 37. Phase 2B.2 Fail-Closed Provenance Verification
+
+Phase 2B.2 enforces that database provenance cannot be claimed or stamped solely from a caller-supplied directory. `OfficialSourceVerifier` (`backend/pipeline/bootstrap/provenance.py`) enforces four mandatory gates:
+1. **Repository Root & Canonical Path Gate:** Validates Git repository root via `git rev-parse --show-toplevel` and enforces canonical structure `<source_root>/backend/data/raw`.
+2. **Git Commit Gate:** Confirms checked-out HEAD equals `b8bf39f8e94729687c2e877dc164ea8a4f69e2b1`.
+3. **Clean Tree Gate:** Confirms working tree is completely clean (`git status --porcelain=v1` is empty).
+4. **Committed Manifest & SHA-256 Gate:** Confirms destination manifest metadata matches commit/repo, and computes SHA-256 for all 15 raw CSVs against the manifest.
+5. **Database Stamping:** Provenance fields in `MarketDataImport` are populated strictly from the verified immutable `VerifiedBootstrapSource` container.
+6. **Backend Test Suite:** Expanded from 76 to **83 passing tests** covering wrong commit, dirty worktree, SHA mismatch, manifest commit mismatch, missing symbols, and arbitrary directory rejection.
+
+---
+
+## 38. Final Recommendation & Sign-Off
+
+RECOMMENDATION: READY FOR CHATGPT REVIEW BEFORE PHASE 2B.2 COMMIT

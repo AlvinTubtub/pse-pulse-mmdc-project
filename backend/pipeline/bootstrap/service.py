@@ -1,7 +1,7 @@
 """Historical bootstrap service for PSE Pulse.
 
 Executes all-or-nothing, conflict-safe, idempotent ingestion of official
-historical OHLCV CSVs into the daily_prices table with complete provenance.
+historical OHLCV CSVs into the daily_prices table with complete, verified provenance.
 """
 
 from datetime import datetime, timezone, date
@@ -25,11 +25,18 @@ from backend.pipeline.bootstrap.official_repo_csv import (
     OfficialRepoHistoricalProvider,
     HistoricalCsvValidationError,
 )
+from backend.pipeline.bootstrap.provenance import (
+    OfficialSourceVerifier,
+    VerifiedBootstrapSource,
+    BootstrapSourceVerificationError,
+    EXPECTED_OFFICIAL_REPOSITORY,
+    EXPECTED_OFFICIAL_COMMIT,
+)
 
 logger = logging.getLogger(__name__)
 
-OFFICIAL_SOURCE_REPOSITORY = "https://github.com/AlvinTubtub/Capstone2-A4103-DigitalDelvers-SY26-27.git"
-OFFICIAL_SOURCE_COMMIT = "b8bf39f8e94729687c2e877dc164ea8a4f69e2b1"
+OFFICIAL_SOURCE_REPOSITORY = EXPECTED_OFFICIAL_REPOSITORY
+OFFICIAL_SOURCE_COMMIT = EXPECTED_OFFICIAL_COMMIT
 
 
 class HistoricalPriceConflictError(ValueError):
@@ -37,36 +44,53 @@ class HistoricalPriceConflictError(ValueError):
 
 
 class HistoricalBootstrapService:
-    """Orchestrates 15-company historical OHLCV bootstrap."""
+    """Orchestrates 15-company historical OHLCV bootstrap with verified provenance."""
 
     def __init__(
         self,
         db: Session,
         allow_conflict_updates: bool = False,
+        verifier: Optional[OfficialSourceVerifier] = None,
     ):
         self.db = db
         self.provider = OfficialRepoHistoricalProvider()
         self.allow_conflict_updates = allow_conflict_updates
+        self.verifier = verifier or OfficialSourceVerifier()
 
     def bootstrap_official_repo(
         self,
-        raw_data_dir: Path,
+        raw_data_dir: Optional[Path] = None,
+        source_root: Optional[Path] = None,
+        verified_source: Optional[VerifiedBootstrapSource] = None,
         dry_run: bool = False,
     ) -> BootstrapSummary:
         """Run all-or-nothing historical bootstrap from official raw CSV directory.
 
         Guarantees:
-        1. All 15 official CSV files must be present, parsed, and validated in memory.
-        2. Synchronizes company and sector metadata.
-        3. Identical rows are counted as unchanged (idempotent).
-        4. Conflicting rows trigger immediate ABORT and ROLLBACK (no silent overwrite).
-        5. Writes immutable MarketDataImport provenance for each symbol.
-        6. Entire 15-company operation commits in a SINGLE atomic database transaction.
-        7. In dry_run mode, transaction is rolled back; zero mutations persist.
+        1. Source repository, commit, and SHA-256 hashes must be verified before any DB interaction.
+        2. All 15 official CSV files must be present, parsed, and validated in memory.
+        3. Synchronizes company and sector metadata.
+        4. Identical rows are counted as unchanged (idempotent).
+        5. Conflicting rows trigger immediate ABORT and ROLLBACK (no silent overwrite).
+        6. Writes immutable MarketDataImport provenance for each symbol derived from verified source.
+        7. Entire 15-company operation commits in a SINGLE atomic database transaction.
+        8. In dry_run mode, transaction is rolled back; zero mutations persist.
         """
+        # Step 0: Fail-closed source provenance verification gate
+        if verified_source is None:
+            logger.info("Executing fail-closed provenance verification for historical bootstrap...")
+            verified_source = self.verifier.verify(
+                source_root=source_root,
+                raw_data_dir=raw_data_dir,
+            )
+
+        active_raw_dir = verified_source.raw_data_dir
+
         logger.info(
-            "Starting 15-company historical bootstrap from %s (dry_run=%s)...",
-            raw_data_dir,
+            "Starting 15-company historical bootstrap from %s (source_root=%s, commit=%s, dry_run=%s)...",
+            active_raw_dir,
+            verified_source.source_root,
+            verified_source.commit,
             dry_run,
         )
 
@@ -74,7 +98,7 @@ class HistoricalBootstrapService:
         parsed_data: Dict[str, Tuple[List[HistoricalQuote], str, Path]] = {}
 
         for conf in sorted(OFFICIAL_15_COMPANIES, key=lambda c: c.symbol):
-            fpath = raw_data_dir / conf.raw_filename
+            fpath = active_raw_dir / conf.raw_filename
             if not fpath.exists():
                 raise FileNotFoundError(
                     f"Official repository file for {conf.symbol} missing: {fpath}. "
@@ -184,12 +208,12 @@ class HistoricalBootstrapService:
                 if overall_end_date is None or (last_dt and last_dt > overall_end_date):
                     overall_end_date = last_dt
 
-                # Stage provenance audit record for this symbol
+                # Stage provenance audit record for this symbol using verified source
                 if not dry_run:
                     import_record = MarketDataImport(
                         source_type="OFFICIAL_REPO_BOOTSTRAP",
-                        source_repository=OFFICIAL_SOURCE_REPOSITORY,
-                        source_commit=OFFICIAL_SOURCE_COMMIT,
+                        source_repository=verified_source.repository,
+                        source_commit=verified_source.commit,
                         source_path=f"backend/data/raw/{conf.raw_filename}",
                         source_filename=conf.raw_filename,
                         symbol=sym,

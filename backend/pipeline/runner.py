@@ -67,10 +67,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Allow re-importing a file even if its SHA-256 was previously imported",
     )
     parser.add_argument(
+        "--bootstrap-source-root",
+        type=Path,
+        default=None,
+        help="Path to verified official Git repository checkout for 15-company historical bootstrap",
+    )
+    parser.add_argument(
         "--bootstrap-dir",
         type=Path,
         default=None,
-        help="Path to directory containing official 15-company raw CSVs to bootstrap historical OHLCV data",
+        help="Path to canonical raw CSV directory within verified official Git repository for historical bootstrap",
+    )
+    parser.add_argument(
+        "--allow-conflict-updates",
+        action="store_true",
+        help="Allow updating differing existing records instead of aborting on conflict during bootstrap",
     )
     return parser
 
@@ -102,6 +113,8 @@ def run_pipeline(
     ingest_only: bool = False,
     force: bool = False,
     bootstrap_dir: Optional[Path] = None,
+    bootstrap_source_root: Optional[Path] = None,
+    allow_conflict_updates: bool = False,
     db: Optional[Session] = None,
 ) -> int:
     """Execute the PSE Pulse pipeline."""
@@ -129,11 +142,19 @@ def run_pipeline(
 
     try:
         # Branch A: 15-company historical bootstrap
-        if bootstrap_dir is not None:
-            logger.info("Running 15-company historical bootstrap from %s", bootstrap_dir)
-            bootstrap_svc = HistoricalBootstrapService(db=db)
+        if bootstrap_source_root is not None or bootstrap_dir is not None:
+            logger.info(
+                "Running verified 15-company historical bootstrap (source_root=%s, raw_dir=%s)...",
+                bootstrap_source_root,
+                bootstrap_dir,
+            )
+            bootstrap_svc = HistoricalBootstrapService(
+                db=db,
+                allow_conflict_updates=allow_conflict_updates,
+            )
             summary = bootstrap_svc.bootstrap_official_repo(
-                raw_data_dir=Path(bootstrap_dir),
+                source_root=Path(bootstrap_source_root) if bootstrap_source_root else None,
+                raw_data_dir=Path(bootstrap_dir) if bootstrap_dir else None,
                 dry_run=dry_run,
             )
             total_ingested = summary.total_rows_inserted + summary.total_rows_updated
@@ -380,6 +401,8 @@ def main():
         ingest_only=args.ingest_only,
         force=args.force,
         bootstrap_dir=args.bootstrap_dir,
+        bootstrap_source_root=args.bootstrap_source_root,
+        allow_conflict_updates=args.allow_conflict_updates,
     )
     sys.exit(exit_code)
 

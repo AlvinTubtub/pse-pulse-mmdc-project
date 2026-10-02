@@ -1,4 +1,4 @@
-"""CLI tool for official repository historical OHLCV bootstrap."""
+"""CLI tool for official repository historical OHLCV bootstrap with verified provenance."""
 
 import argparse
 import logging
@@ -7,6 +7,7 @@ import sys
 
 from backend.app.database import SessionLocal
 from backend.pipeline.bootstrap.service import HistoricalBootstrapService
+from backend.pipeline.bootstrap.provenance import BootstrapSourceVerificationError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,11 +20,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Bootstrap the PSE Pulse database from official 15-company historical CSVs"
     )
-    parser.add_argument(
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--source-root",
+        type=Path,
+        help="Path to verified official Git repository checkout (e.g. /tmp/pse-pulse-official-source)",
+    )
+    group.add_argument(
         "--raw-dir",
         type=Path,
-        required=True,
-        help="Path to directory containing the 15 official raw CSVs (e.g. /tmp/pse-pulse-official-source/backend/data/raw)",
+        help="Path to canonical raw CSV directory within verified official Git repository (e.g. /tmp/pse-pulse-official-source/backend/data/raw)",
     )
     parser.add_argument(
         "--dry-run",
@@ -49,6 +55,7 @@ def main() -> int:
             allow_conflict_updates=args.allow_conflict_updates,
         )
         summary = service.bootstrap_official_repo(
+            source_root=args.source_root,
             raw_data_dir=args.raw_dir,
             dry_run=args.dry_run,
         )
@@ -64,6 +71,9 @@ def main() -> int:
             summary.date_range_end,
         )
         return 0
+    except BootstrapSourceVerificationError as e:
+        logger.error("Bootstrap aborted: source provenance verification failed: %s", e)
+        return 1
     except Exception as e:
         logger.error("Bootstrap execution failed: %s", e, exc_info=True)
         return 1

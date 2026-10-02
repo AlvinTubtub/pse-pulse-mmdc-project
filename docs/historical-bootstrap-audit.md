@@ -6,7 +6,7 @@ This document records the comprehensive audit and reconciliation of the historic
 - **Pinned Source Commit:** `b8bf39f8e94729687c2e877dc164ea8a4f69e2b1`
 - **Source Directory:** `backend/data/raw/*.csv`
 - **Audit Date:** 2026-10-02
-- **Bootstrap Manifest:** [`backend/bootstrap-manifests/official_repo_b8bf39f_manifest.json`](file:///Users/alvintubtub/Documents/Antigravity/pse-pulse-mmdc-project/backend/bootstrap-manifests/official_repo_b8bf39f_manifest.json)
+- **Bootstrap Manifest:** [`backend/bootstrap-manifests/official_repo_b8bf39f_manifest.json`](../backend/bootstrap-manifests/official_repo_b8bf39f_manifest.json)
 
 ---
 
@@ -96,3 +96,16 @@ The historical bootstrap pipeline enforces:
    - `file_hash`: SHA-256 checksum of the ingested file
    - `first_trade_date` & `last_trade_date`: Precise temporal boundaries
    - `records_inserted`, `records_updated`, `records_unchanged`: Exact mutation counts.
+
+---
+
+## 5. Fail-Closed Provenance Verification (Phase 2B.2)
+
+To prevent unverified or arbitrary directories from receiving pinned official source provenance stamps, PSE Pulse implements `OfficialSourceVerifier`:
+
+1. **Gate 1 — Git Repository Root & Canonical Path:** Verifies that the supplied path belongs to a valid Git repository root and resolves canonically to `<source_root>/backend/data/raw`. Arbitrary directories or path traversals fail immediately.
+2. **Gate 2 — Git HEAD Commit:** Verifies programmatically via `git -C <root> rev-parse HEAD` that the repository checkout matches the exact pinned official commit (`b8bf39f8e94729687c2e877dc164ea8a4f69e2b1`).
+3. **Gate 3 — Clean Working Tree:** Verifies programmatically via `git -C <root> status --porcelain=v1` that the checkout is untouched (empty status). Any uncommitted modifications, deletions, or untracked files fail closed.
+4. **Gate 4 — Committed Manifest & SHA-256 Parity:** Validates all 15 raw CSV files against `backend/bootstrap-manifests/official_repo_b8bf39f_manifest.json`. Every file must match the authoritative SHA-256 hash, row count (1,649 data rows), and trade date bounds.
+
+Database provenance fields (`source_repository`, `source_commit`) in `MarketDataImport` are populated strictly from the resulting `VerifiedBootstrapSource` container. Any verification failure aborts execution before any Company, Sector, DailyPrice, or MarketDataImport bootstrap records are created or modified (yielding 0 market data mutations; dry-run persists zero database mutations across all tables, while a non-dry-run runner safely persists a `PipelineRun` record with status `FAILED`).

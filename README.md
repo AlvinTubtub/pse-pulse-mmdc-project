@@ -174,16 +174,26 @@ python -m backend.pipeline.runner --source-file path/to/report.pdf
 python -m backend.pipeline.runner --source-file path/to/report.pdf --ingest-only
 ```
 
-### Historical OHLCV Bootstrap (Phase 2B)
+### Historical OHLCV Bootstrap (Phase 2B & 2B.2)
 
-Import 2020–2026 historical daily OHLCV datasets across all 15 canonical companies with atomic all-or-nothing transactions:
+Import 2020–2026 historical daily OHLCV datasets across all 15 canonical companies with atomic all-or-nothing transactions and fail-closed provenance verification.
+
+The historical bootstrap enforces three mandatory provenance integrity gates before allowing any database persistence:
+1. **Git Commit Gate:** The supplied source repository checkout must match the exact pinned official commit (`b8bf39f8e94729687c2e877dc164ea8a4f69e2b1`).
+2. **Clean Worktree Gate:** The source repository working tree must be untouched and clean (`git status --porcelain=v1` must be empty).
+3. **Manifest SHA-256 Gate:** All 15 source raw CSV files must match the authoritative SHA-256 hashes and row counts recorded in `backend/bootstrap-manifests/official_repo_b8bf39f_manifest.json`.
+
+Database provenance is fail-closed and cannot be stamped from arbitrary caller-supplied directories.
 
 ```bash
-# Dry run: validate files and conflict checks without writing to database
-python -m backend.pipeline.runner --bootstrap-dir /path/to/official/data/raw --dry-run
+# Dry run: verify source provenance and simulate bootstrap without database writes
+python -m backend.pipeline.runner --bootstrap-source-root /path/to/official/repo --dry-run
 
 # Execute atomic all-or-nothing historical bootstrap across all 15 symbols
-python -m backend.pipeline.runner --bootstrap-dir /path/to/official/data/raw
+python -m backend.pipeline.runner --bootstrap-source-root /path/to/official/repo
+
+# Standalone CLI entrypoint
+python -m backend.pipeline.bootstrap.cli --source-root /path/to/official/repo --dry-run
 ```
 
 See [docs/data-ingestion.md](docs/data-ingestion.md) and [docs/historical-bootstrap-audit.md](docs/historical-bootstrap-audit.md) for full ingestion architecture, validation rules, and schema specifications.
