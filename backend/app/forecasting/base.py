@@ -36,7 +36,7 @@ class PriceHistoryItem(BaseModel):
     high_price: float
     low_price: float
     close_price: float
-    volume: int
+    volume: float
 
 
 class ForecastProvider(ABC):

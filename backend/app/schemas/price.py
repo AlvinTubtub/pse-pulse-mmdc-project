@@ -1,6 +1,7 @@
 """Daily price Pydantic schemas."""
 
 from datetime import date
+from decimal import Decimal
 from typing import Optional
 from backend.app.schemas.common import BaseSchema
 
@@ -13,5 +14,5 @@ class DailyPriceRead(BaseSchema):
     high_price: float
     low_price: float
     close_price: float
-    volume: int
+    volume: Decimal
     value: Optional[float] = None

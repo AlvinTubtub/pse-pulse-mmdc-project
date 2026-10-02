@@ -15,7 +15,7 @@ class EODQuote(BaseModel):
     high_price: Decimal
     low_price: Decimal
     close_price: Decimal
-    volume: int = Field(ge=0)
+    volume: Decimal = Field(ge=0)
     value: Optional[Decimal] = None
     source: str = "PSE_DQR_FILE"
     security_name: Optional[str] = None

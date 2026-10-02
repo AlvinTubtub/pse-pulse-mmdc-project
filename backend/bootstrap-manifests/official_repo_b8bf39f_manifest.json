@@ -1,0 +1,149 @@
+{
+  "schema_version": "1.0.0",
+  "source_repository": "https://github.com/AlvinTubtub/Capstone2-A4103-DigitalDelvers-SY26-27.git",
+  "source_commit": "b8bf39f8e94729687c2e877dc164ea8a4f69e2b1",
+  "generated_at": "2026-10-02T05:34:03.270843+00:00",
+  "symbols_count": 15,
+  "total_rows": 24735,
+  "date_range": {
+    "start": "2020-01-02",
+    "end": "2026-10-01"
+  },
+  "symbols": [
+    {
+      "symbol": "ALI",
+      "source_path": "backend/data/raw/ALI.csv",
+      "source_filename": "ALI.csv",
+      "sha256": "d15fb349c16909de28d293cdd5f8429c4a4f69a2f2b1d33eef82b2194f202d51",
+      "row_count": 1649,
+      "first_trade_date": "2020-01-02",
+      "last_trade_date": "2026-10-01"
+    },
+    {
+      "symbol": "APX",
+      "source_path": "backend/data/raw/APX.csv",
+      "source_filename": "APX.csv",
+      "sha256": "44ca7605758889730d5189c4bb8b855ce202bf6a1eba282248b1f88f427649c4",
+      "row_count": 1649,
+      "first_trade_date": "2020-01-02",
+      "last_trade_date": "2026-10-01"
+    },
+    {
+      "symbol": "BPI",
+      "source_path": "backend/data/raw/BPI.csv",
+      "source_filename": "BPI.csv",
+      "sha256": "22ddebe6526f4c664ea8fcb347ef754da667e0e34691741dd19920b040eca4f8",
+      "row_count": 1649,
+      "first_trade_date": "2020-01-02",
+      "last_trade_date": "2026-10-01"
+    },
+    {
+      "symbol": "GLO",
+      "source_path": "backend/data/raw/GLO.csv",
+      "source_filename": "GLO.csv",
+      "sha256": "e5830daf700b23b47eaaccc1b5b621e74bdb74605339584fb706f681c19182a1",
+      "row_count": 1649,
+      "first_trade_date": "2020-01-02",
+      "last_trade_date": "2026-10-01"
+    },
+    {
+      "symbol": "ICT",
+      "source_path": "backend/data/raw/ICT.csv",
+      "source_filename": "ICT.csv",
+      "sha256": "37b43032eb2fcf5a54a7a065bb4844f210e20643dfa6f5586ac0159284caa0a8",
+      "row_count": 1649,
+      "first_trade_date": "2020-01-02",
+      "last_trade_date": "2026-10-01"
+    },
+    {
+      "symbol": "JFC",
+      "source_path": "backend/data/raw/JFC.csv",
+      "source_filename": "JFC.csv",
+      "sha256": "1ce4b7c7c5c91f451beee4c70140db564e68c775ead35a49f0eebb45e92ddd9d",
+      "row_count": 1649,
+      "first_trade_date": "2020-01-02",
+      "last_trade_date": "2026-10-01"
+    },
+    {
+      "symbol": "MBT",
+      "source_path": "backend/data/raw/MBT.csv",
+      "source_filename": "MBT.csv",
+      "sha256": "567199389b58ffda3c4a8be5aadc2f0dc66d1365f00eaf7302c03e1359cf0e0d",
+      "row_count": 1649,
+      "first_trade_date": "2020-01-02",
+      "last_trade_date": "2026-10-01"
+    },
+    {
+      "symbol": "MEG",
+      "source_path": "backend/data/raw/MEG.csv",
+      "source_filename": "MEG.csv",
+      "sha256": "7fdc5038bff1db1d563e1d601a51ced86319a4f8ee219d78f34fd2ee8cb28eed",
+      "row_count": 1649,
+      "first_trade_date": "2020-01-02",
+      "last_trade_date": "2026-10-01"
+    },
+    {
+      "symbol": "MER",
+      "source_path": "backend/data/raw/MER.csv",
+      "source_filename": "MER.csv",
+      "sha256": "937cdee1bb02a27f4c7bb419109e8e685ef8cf2220c66af5de6db16032fdb862",
+      "row_count": 1649,
+      "first_trade_date": "2020-01-02",
+      "last_trade_date": "2026-10-01"
+    },
+    {
+      "symbol": "NIKL",
+      "source_path": "backend/data/raw/NIKL.csv",
+      "source_filename": "NIKL.csv",
+      "sha256": "8d523b0a410613cd853f0258a72c733a99db639120183992c434cd46c975c7f2",
+      "row_count": 1649,
+      "first_trade_date": "2020-01-02",
+      "last_trade_date": "2026-10-01"
+    },
+    {
+      "symbol": "PGOLD",
+      "source_path": "backend/data/raw/PGOLD.csv",
+      "source_filename": "PGOLD.csv",
+      "sha256": "fb200d59909c12109fe91906fd67b2de2be7d92e7bde1e68d1f995cb885da3e4",
+      "row_count": 1649,
+      "first_trade_date": "2020-01-02",
+      "last_trade_date": "2026-10-01"
+    },
+    {
+      "symbol": "SCC",
+      "source_path": "backend/data/raw/SCC.csv",
+      "source_filename": "SCC.csv",
+      "sha256": "a021416b025e5f58ed8a9f777600635d6239d220ec011a73f370c5ec354844c4",
+      "row_count": 1649,
+      "first_trade_date": "2020-01-02",
+      "last_trade_date": "2026-10-01"
+    },
+    {
+      "symbol": "SECB",
+      "source_path": "backend/data/raw/SECB.csv",
+      "source_filename": "SECB.csv",
+      "sha256": "a383fc2f07e2e2eb279a09ef0bd36eff59e45a6304725bf09c5972dd523f2e46",
+      "row_count": 1649,
+      "first_trade_date": "2020-01-02",
+      "last_trade_date": "2026-10-01"
+    },
+    {
+      "symbol": "SHLPH",
+      "source_path": "backend/data/raw/SHLPH.csv",
+      "source_filename": "SHLPH.csv",
+      "sha256": "3a709ea69eb03a5402c207b47a17e4834b82980a7732f201ecdb2a85b5b15b7e",
+      "row_count": 1649,
+      "first_trade_date": "2020-01-02",
+      "last_trade_date": "2026-10-01"
+    },
+    {
+      "symbol": "SMPH",
+      "source_path": "backend/data/raw/SMPH.csv",
+      "source_filename": "SMPH.csv",
+      "sha256": "4940470d00520dad4679f33bde4979a37d62c892c5acbbd171d8c8dba2dcde27",
+      "row_count": 1649,
+      "first_trade_date": "2020-01-02",
+      "last_trade_date": "2026-10-01"
+    }
+  ]
+}

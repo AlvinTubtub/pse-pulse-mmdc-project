@@ -59,7 +59,11 @@ pse-pulse-mmdc-project/
 ├── docs/
 │   ├── architecture.md        # Technical architecture & design rationale
 │   ├── azure-deployment.md    # Future Azure deployment runbook
-│   └── cost-guardrails.md     # Free-tier constraints & spending protections
+│   ├── cost-guardrails.md     # Free-tier constraints & spending protections
+│   ├── data-ingestion.md      # EOD and historical bootstrap data ingestion guide
+│   ├── historical-bootstrap-audit.md  # 15-company historical dataset audit report
+│   ├── official-backend-porting-matrix.md # Module porting inventory & dispositions
+│   └── model-porting-plan.md  # Machine learning model porting & serving strategy
 ├── docker-compose.dev.yml     # Local development PostgreSQL container only
 ├── .env.example               # Environment variables template
 ├── .gitignore                 # Source control ignore rules
@@ -170,7 +174,19 @@ python -m backend.pipeline.runner --source-file path/to/report.pdf
 python -m backend.pipeline.runner --source-file path/to/report.pdf --ingest-only
 ```
 
-See [docs/data-ingestion.md](docs/data-ingestion.md) for full ingestion architecture, validation rules, and schema specifications.
+### Historical OHLCV Bootstrap (Phase 2B)
+
+Import 2020–2026 historical daily OHLCV datasets across all 15 canonical companies with atomic all-or-nothing transactions:
+
+```bash
+# Dry run: validate files and conflict checks without writing to database
+python -m backend.pipeline.runner --bootstrap-dir /path/to/official/data/raw --dry-run
+
+# Execute atomic all-or-nothing historical bootstrap across all 15 symbols
+python -m backend.pipeline.runner --bootstrap-dir /path/to/official/data/raw
+```
+
+See [docs/data-ingestion.md](docs/data-ingestion.md) and [docs/historical-bootstrap-audit.md](docs/historical-bootstrap-audit.md) for full ingestion architecture, validation rules, and schema specifications.
 
 ---
 

@@ -18,7 +18,15 @@ class MarketDataImportRead(BaseSchema):
     records_inserted: int
     records_updated: int
     records_rejected: int
+    records_unchanged: int = 0
+    source_repository: Optional[str] = None
+    source_commit: Optional[str] = None
+    source_path: Optional[str] = None
+    symbol: Optional[str] = None
+    first_trade_date: Optional[date] = None
+    last_trade_date: Optional[date] = None
     error_message: Optional[str] = None
+
 
 
 class PipelineRunRead(BaseSchema):

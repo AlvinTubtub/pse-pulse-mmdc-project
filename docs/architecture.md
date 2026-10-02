@@ -79,3 +79,37 @@ Frameworks like TensorFlow and PyTorch require hundreds of megabytes of wheel de
 
 While VNet integration is standard in enterprise environments, Azure Database for PostgreSQL Flexible Server VNet integration mandates an Azure Private DNS zone (`*.postgres.database.azure.com`). Private DNS zones incur monthly zone fees and DNS resolution charges outside the zero-cost student free-tier list.
 By enabling public network access restricted exclusively to the VM's static public IPv4 via the server firewall, combined with mandatory TLS (`sslmode=require`), PSE Pulse maintains strong perimeter isolation while remaining strictly within the free-service bracket. Arbitrary public internet traffic and unapproved IP addresses are blocked at the Azure firewall layer.
+
+---
+
+## 5. Canonical 15-Company Domain Universe
+
+The application tracks a canonical universe of 15 major Philippine equities across exactly **5 sectors** defined in `backend/app/domain/company_universe.py`:
+
+- **Property (3):** `ALI` (Ayala Land), `MEG` (Megaworld), `SMPH` (SM Prime)
+- **Financials (3):** `BPI` (Bank of the Philippine Islands), `MBT` (Metrobank), `SECB` (Security Bank)
+- **Services (3):** `GLO` (Globe Telecom), `ICT` (ICTSI), `PGOLD` (Puregold)
+- **Mining and Oil (3):** `APX` (Apex Mining), `NIKL` (Nickel Asia), `SCC` (Semirara)
+- **Industrial (3):** `JFC` (Jollibee Foods), `MER` (Meralco), `SHLPH` (Shell Pilipinas)
+
+The `CompanySyncService` (`backend/app/services/company_sync.py`) synchronizes these companies and their sectors into the PostgreSQL database idempotently, ensuring only the 15 canonical companies are marked active, before running any data ingestion or bootstrap routines.
+
+---
+
+## 6. Historical OHLCV Bootstrap Architecture (Phase 2B)
+
+To provide deep historical data (2020–2026) for model scoring and backtesting, the historical bootstrap engine imports official historical datasets with strong safety guarantees:
+
+- **All-or-Nothing Atomicity:** All 15 companies and 24,735 records are validated and committed in a single database transaction. If any symbol encounters a validation failure or price conflict, the entire transaction rolls back.
+- **Conflict Detection:** Existing records are checked against incoming prices; differences trigger `HistoricalPriceConflictError` rather than silently mutating data.
+- **Exact Numeric Volume Preservation:** Volume is stored as `Numeric(20, 4)` via Alembic revision `0004_change_daily_price_volume_to_numeric`, preserving all raw source volumes (including 28 banking rows with `.5` fractional turnover volume) with 100% mathematical fidelity.
+- **Full Provenance Tracking:** Alembic revision `0003_add_historical_bootstrap_provenance` records repository URL, Git commit SHA, file path, symbol, date ranges, and exact mutation counts in `market_data_imports`.
+
+---
+
+## 7. Model Decoupling & Inference Serving (Phase 3 Architecture)
+
+As detailed in `docs/model-porting-plan.md`:
+- **Training is strictly offline:** Heavy libraries (PyTorch, TensorFlow, pmdarima) run on developer machines or isolated CI workers.
+- **Inference is lightweight:** Production uses pre-computed ARIMA parameters, scikit-learn regression pipelines, and ONNX Runtime for LSTM scoring.
+- **Artifact Management:** Pre-trained model artifacts are versioned in Azure Blob Storage with SHA-256 manifest validation on startup.

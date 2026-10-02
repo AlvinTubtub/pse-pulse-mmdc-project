@@ -137,14 +137,14 @@ class DataValidator:
 
         # 4. Volume check
         if raw_volume is None or not cls._is_finite_number(raw_volume):
-            errors.append("Volume must be a valid, finite non-negative integer")
+            errors.append("Volume must be a valid, finite non-negative number")
         else:
             try:
-                vol_int = int(Decimal(str(raw_volume)))
-                if vol_int < 0:
-                    errors.append(f"Volume must be non-negative (received {vol_int})")
+                vol_d = Decimal(str(raw_volume))
+                if vol_d < 0:
+                    errors.append(f"Volume must be non-negative (received {vol_d})")
             except (ValueError, TypeError, InvalidOperation):
-                errors.append("Volume could not be parsed as an integer")
+                errors.append("Volume could not be parsed as a numeric value")
 
         # 5. Value check (if present)
         if raw_value is not None:

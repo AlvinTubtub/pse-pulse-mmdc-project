@@ -190,7 +190,7 @@ class DatabaseSaver:
                         and _dec_match(existing.high_price, quote.high_price)
                         and _dec_match(existing.low_price, quote.low_price)
                         and _dec_match(existing.close_price, quote.close_price)
-                        and int(existing.volume) == int(quote.volume)
+                        and _dec_match(existing.volume, quote.volume)
                     )
                     if quote.value is not None and existing.value is not None:
                         is_same = is_same and _dec_match(existing.value, quote.value, "0.01")

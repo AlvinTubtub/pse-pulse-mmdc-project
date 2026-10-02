@@ -26,7 +26,7 @@ class DailyPrice(Base):
     high_price = Column(Numeric(12, 4), nullable=False)
     low_price = Column(Numeric(12, 4), nullable=False)
     close_price = Column(Numeric(12, 4), nullable=False)
-    volume = Column(BigInteger, nullable=False, default=0)
+    volume = Column(Numeric(20, 4), nullable=False, default=0)
     value = Column(Numeric(18, 4), nullable=True)
     created_at = Column(
         DateTime(timezone=True),

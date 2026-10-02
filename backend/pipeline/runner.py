@@ -24,6 +24,8 @@ from backend.app.models.company import Company
 from backend.app.models.price import DailyPrice
 from backend.app.forecasting.base import PriceHistoryItem
 from backend.pipeline.ingest.models import ImportSummary
+from backend.pipeline.bootstrap.service import HistoricalBootstrapService
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,7 +66,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow re-importing a file even if its SHA-256 was previously imported",
     )
+    parser.add_argument(
+        "--bootstrap-dir",
+        type=Path,
+        default=None,
+        help="Path to directory containing official 15-company raw CSVs to bootstrap historical OHLCV data",
+    )
     return parser
+
 
 
 def find_incoming_file() -> Optional[Path]:
@@ -92,6 +101,7 @@ def run_pipeline(
     dry_run: bool = False,
     ingest_only: bool = False,
     force: bool = False,
+    bootstrap_dir: Optional[Path] = None,
     db: Optional[Session] = None,
 ) -> int:
     """Execute the PSE Pulse pipeline."""
@@ -102,13 +112,6 @@ def run_pipeline(
         settings.DEMO_MODE,
         dry_run,
     )
-
-    # Determine source file
-    active_source = source_file
-    if active_source is None:
-        active_source = find_incoming_file()
-        if active_source:
-            logger.info("Discovered incoming market report: %s", active_source)
 
     close_db_on_exit = False
     if db is None:
@@ -125,12 +128,45 @@ def run_pipeline(
     import_summary: Optional[ImportSummary] = None
 
     try:
+        # Branch A: 15-company historical bootstrap
+        if bootstrap_dir is not None:
+            logger.info("Running 15-company historical bootstrap from %s", bootstrap_dir)
+            bootstrap_svc = HistoricalBootstrapService(db=db)
+            summary = bootstrap_svc.bootstrap_official_repo(
+                raw_data_dir=Path(bootstrap_dir),
+                dry_run=dry_run,
+            )
+            total_ingested = summary.total_rows_inserted + summary.total_rows_updated
+            logger.info(
+                "Historical bootstrap finished. Inserted: %d, Updated: %d, Unchanged: %d",
+                summary.total_rows_inserted,
+                summary.total_rows_updated,
+                summary.total_rows_unchanged,
+            )
+            if not dry_run and run_record:
+                saver.finish_run_record(
+                    run_id=run_record.run_id,
+                    status="COMPLETED",
+                    records_ingested=total_ingested,
+                    forecasts_generated=0,
+                )
+            return 0
+
+        # Branch B: Standard EOD cycle
+        # Determine source file
+        active_source = source_file
+        if active_source is None:
+            active_source = find_incoming_file()
+            if active_source:
+                logger.info("Discovered incoming market report: %s", active_source)
+
         # Step 1: Market Availability & Ingestion
         ingest_svc = EODIngestionService()
         validator = DataValidator()
 
         if active_source is not None:
             source_path = Path(active_source)
+
             logger.info("Processing source market data file: %s", source_path)
 
             try:
@@ -343,8 +379,10 @@ def main():
         dry_run=args.dry_run,
         ingest_only=args.ingest_only,
         force=args.force,
+        bootstrap_dir=args.bootstrap_dir,
     )
     sys.exit(exit_code)
+
 
 
 if __name__ == "__main__":
