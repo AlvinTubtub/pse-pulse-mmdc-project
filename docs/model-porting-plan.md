@@ -1,6 +1,6 @@
 # Forecasting Model Porting & Inference Serving Plan
 
-This document defines the architectural strategy for porting the three forecasting models (ARIMA, Lag-10 Linear Regression, and LSTM) from the official research repository into the **PSE Pulse — Personal Azure Edition** production architecture.
+This document defines the architectural strategy for porting the three forecasting models (ARIMA, Lag-Informed Regression, and LSTM) from the official research repository into the **PSE Pulse — Personal Azure Edition** production architecture.
 
 - **Source Repository:** `https://github.com/AlvinTubtub/Capstone2-A4103-DigitalDelvers-SY26-27.git` (`b8bf39f8e94729687c2e877dc164ea8a4f69e2b1`)
 - **Target Phases:** Phase 2B (Planning & Foundation) $\to$ Phase 3 (Engine Porting & Scoring Pipeline)
@@ -109,17 +109,19 @@ For the personal Azure deployment, we enforce a **strict separation of concerns*
 
 ## 3. Artifact Storage & Versioning Strategy
 
-Model artifacts are managed in a structured directory layout (`backend/artifacts/models/`):
+Phase 3A development artifacts may use the configured local artifact store. The Phase 3B.2 acceptance bundle is generated only under an external persistent root such as `~/pse-pulse-production-artifacts/`; it is never written into the repository.
 
 ```
-backend/artifacts/models/
-└── <bundle_version>/
+~/pse-pulse-production-artifacts/
+└── 2026.10.01-authoritative-v1/
     ├── manifest.json                   # Bundle metadata, file SHAs, source commit
     ├── ALI/
     │   ├── lag_regression.joblib       # Fitted LIR wrapper
     │   ├── lag_regression.metadata.json# Parameters, coefficients, scaler, SHA-256
     │   ├── arima.joblib                # Fitted ARIMA wrapper
-    │   └── arima.metadata.json         # Order, trend, parameters, fit attempts, SHA-256
+    │   ├── arima.metadata.json         # Order, trend, parameters, fit attempts, SHA-256
+    │   ├── lstm.pt                     # CPU-safe PyTorch state dictionary
+    │   └── lstm.metadata.json          # LSTM spec, epoch evidence, provenance, SHA-256
     └── ... (15 symbols)
 ```
 
@@ -177,8 +179,8 @@ Database lineage connects model binaries, execution runs, and forecasts:
 ## 5. Implementation Roadmap
 
 1. **Phase 3A — Complete:** Real LIR and ARIMA engines, causal features, trading calendar, refit primitives, safe artifact loading, database lineage, and acceptance.
-2. **Phase 3B.1 — This phase:** Pin and validate the official selected-configuration snapshot; port the canonical univariate PyTorch LSTM, its safe state-dict artifact foundation, and a BPI-only non-authoritative offline smoke.
-3. **Phase 3B.2 — Deferred:** Generate the all-15 production artifact bundle using the accepted authoritative configurations.
-4. **Phase 3B.3 — Deferred:** Evaluate the bundle and independently gate any real forecast activation. No LSTM activation or Azure deployment occurs in Phase 3B.1.
+2. **Phase 3B.1 — Complete:** Pin and validate the official selected-configuration snapshot; port the canonical univariate PyTorch LSTM and safe state-dict artifact foundation.
+3. **Phase 3B.2 — Candidate bundle generation:** Build and verify all 45 authoritative artifacts for the canonical 15 companies. This phase does not activate artifacts or persist forecasts.
+4. **Phase 3B.3 — Deferred:** Independently evaluate the candidate bundle and gate any real forecast activation or Azure deployment.
 
 The production application dependencies remain lightweight: PyTorch is isolated in `backend/requirements-lstm.txt` and the dedicated CPU LSTM CI job. The Phase 3A `backend/requirements-models.txt` remains unchanged. ONNX conversion and `onnxruntime` are deferred pending separate review after canonical PyTorch parity is accepted.

@@ -75,7 +75,9 @@ jobs:
             backend/tests/test_real_selections.py \
             backend/tests/test_real_lstm_dependency_boundary.py \
             backend/tests/test_real_lstm.py \
-            backend/tests/test_real_lstm_artifacts.py
+            backend/tests/test_real_lstm_artifacts.py \
+            backend/tests/test_phase3b2_bundle.py \
+            backend/tests/test_real_authoritative_artifacts.py
 
   frontend-build:
     name: Frontend Lint, Typecheck & Static Export

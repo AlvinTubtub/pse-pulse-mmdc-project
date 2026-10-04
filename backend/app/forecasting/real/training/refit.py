@@ -22,6 +22,7 @@ from backend.app.forecasting.real.config import (
     ModelId,
 )
 from backend.app.forecasting.real.domain import OhlcvRecord
+from backend.app.domain.company_universe import get_all_configured_symbols
 from backend.app.forecasting.real.features.regression_features import build_regression_dataset
 from backend.app.forecasting.real.history import load_company_ohlcv_history
 from backend.app.forecasting.real.models.arima import ArimaSpecification
@@ -35,21 +36,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger("pse_pulse_model_refit")
 
-OFFICIAL_15_SYMBOLS = (
-    "AC", "AEV", "ALI", "BDO", "BPI", "GLO", "ICT", "JFC",
-    "MBCO", "MBT", "MER", "PGOLD", "SM", "SMPH", "TEL",
-)
-
-
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="PSE Pulse Offline Model Refit and Artifact Bundle Builder"
+        description=(
+            "Legacy/manual LIR and ARIMA refit utility. Do not use for the "
+            "authoritative Phase 3B.2 all-family bundle; use scripts/phase3b2_build_bundle.py."
+        )
     )
     parser.add_argument(
         "--symbols",
         type=str,
         default="ALL",
-        help="Comma-separated list of symbols (or 'ALL' for all tracked companies)",
+        help="Comma-separated symbols (or canonical 'ALL'); manual parameters are non-authoritative",
     )
     parser.add_argument(
         "--models",
@@ -131,6 +129,13 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def resolve_symbols(symbol_argument: str) -> Sequence[str]:
+    """Resolve legacy CLI symbol input against the canonical company universe."""
+    if symbol_argument.strip().upper() == "ALL":
+        return get_all_configured_symbols()
+    return tuple(s.strip().upper() for s in symbol_argument.split(",") if s.strip())
+
+
 def run_refit(
     symbols: Sequence[str],
     model_types: Sequence[str],
@@ -145,7 +150,7 @@ def run_refit(
     arima_order: tuple[int, int, int] = (1, 1, 0),
     arima_trend: str = "n",
 ) -> int:
-    """Execute offline refitting and persist versioned artifacts."""
+    """Execute legacy/manual LIR and ARIMA refitting, not Phase 3B.2 acceptance."""
     db = SessionLocal()
     bundle_root = output_dir.resolve() / bundle_version
 
@@ -298,11 +303,7 @@ def run_refit(
 def main(argv: Optional[Sequence[str]] = None) -> None:
     args = parse_args(argv)
 
-    symbols = (
-        OFFICIAL_15_SYMBOLS
-        if args.symbols.strip().upper() == "ALL"
-        else [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
-    )
+    symbols = resolve_symbols(args.symbols)
 
     model_types = (
         ["LAG_REGRESSION", "ARIMA"]
