@@ -11,6 +11,7 @@ import logging
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import inspect
 
 from backend.app.config import get_settings
 from backend.app.database import engine, Base, SessionLocal
@@ -25,6 +26,11 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger("pse_pulse")
+
+
+def _database_schema_ready_for_seed() -> bool:
+    """Return whether the migrated schema has the table required for seeding."""
+    return inspect(engine).has_table("sectors")
 
 
 @asynccontextmanager
@@ -46,9 +52,7 @@ async def lifespan(app: FastAPI):
 
         if settings.DEMO_MODE:
             logger.info("DEMO_MODE is True: checking if database requires baseline seeding...")
-            from sqlalchemy import inspect
-            inspector = inspect(engine)
-            if inspector.has_table("sectors"):
+            if _database_schema_ready_for_seed():
                 db = SessionLocal()
                 try:
                     seed_database_if_empty(db)

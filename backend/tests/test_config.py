@@ -3,7 +3,7 @@
 from unittest.mock import patch, MagicMock
 import pytest
 from backend.app.config import Settings
-from backend.app.main import lifespan, app
+from backend.app.main import _database_schema_ready_for_seed, lifespan, app
 
 
 def test_settings_defaults():
@@ -144,6 +144,18 @@ def test_settings_development_auto_create_schema_allowed(monkeypatch):
     assert s.AUTO_CREATE_SCHEMA is True
 
 
+@pytest.mark.parametrize("schema_ready", [True, False])
+def test_database_schema_readiness_checks_sectors_table(monkeypatch, schema_ready):
+    inspector = MagicMock()
+    inspector.has_table.return_value = schema_ready
+    inspect_mock = MagicMock(return_value=inspector)
+    monkeypatch.setattr("backend.app.main.inspect", inspect_mock)
+
+    assert _database_schema_ready_for_seed() is schema_ready
+    inspect_mock.assert_called_once()
+    inspector.has_table.assert_called_once_with("sectors")
+
+
 @pytest.mark.asyncio
 async def test_lifespan_development_defaults_to_no_create_all(monkeypatch):
     """By default in development, AUTO_CREATE_SCHEMA is False so create_all is not invoked."""
@@ -152,12 +164,13 @@ async def test_lifespan_development_defaults_to_no_create_all(monkeypatch):
     monkeypatch.setattr("backend.app.main.settings.AUTO_CREATE_SCHEMA", False)
 
     with patch("backend.app.main.Base.metadata.create_all") as mock_create_all, \
+         patch("backend.app.main._database_schema_ready_for_seed", return_value=False), \
          patch("backend.app.main.seed_database_if_empty") as mock_seed:
         async with lifespan(app):
             pass
 
         mock_create_all.assert_not_called()
-        mock_seed.assert_called_once()
+        mock_seed.assert_not_called()
 
 @pytest.mark.asyncio
 async def test_lifespan_development_invokes_create_all_when_flag_enabled(monkeypatch):
@@ -167,9 +180,42 @@ async def test_lifespan_development_invokes_create_all_when_flag_enabled(monkeyp
     monkeypatch.setattr("backend.app.main.settings.AUTO_CREATE_SCHEMA", True)
 
     with patch("backend.app.main.Base.metadata.create_all") as mock_create_all, \
+         patch("backend.app.main._database_schema_ready_for_seed", return_value=True), \
          patch("backend.app.main.seed_database_if_empty") as mock_seed:
         async with lifespan(app):
             pass
 
         mock_create_all.assert_called_once()
         mock_seed.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_development_seeds_when_migrated_schema_is_ready(monkeypatch):
+    monkeypatch.setattr("backend.app.main.settings.ENVIRONMENT", "development")
+    monkeypatch.setattr("backend.app.main.settings.DEMO_MODE", True)
+    monkeypatch.setattr("backend.app.main.settings.AUTO_CREATE_SCHEMA", False)
+
+    with patch("backend.app.main.Base.metadata.create_all") as mock_create_all, \
+         patch("backend.app.main._database_schema_ready_for_seed", return_value=True), \
+         patch("backend.app.main.seed_database_if_empty") as mock_seed:
+        async with lifespan(app):
+            pass
+
+        mock_create_all.assert_not_called()
+        mock_seed.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_lifespan_auto_create_does_not_seed_until_schema_is_ready(monkeypatch):
+    monkeypatch.setattr("backend.app.main.settings.ENVIRONMENT", "development")
+    monkeypatch.setattr("backend.app.main.settings.DEMO_MODE", True)
+    monkeypatch.setattr("backend.app.main.settings.AUTO_CREATE_SCHEMA", True)
+
+    with patch("backend.app.main.Base.metadata.create_all") as mock_create_all, \
+         patch("backend.app.main._database_schema_ready_for_seed", return_value=False), \
+         patch("backend.app.main.seed_database_if_empty") as mock_seed:
+        async with lifespan(app):
+            pass
+
+        mock_create_all.assert_called_once()
+        mock_seed.assert_not_called()

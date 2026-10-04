@@ -76,7 +76,11 @@ API regression tests passed for `GET /health`, `/api/v1/companies`, `/api/v1/for
 
 No generated smoke model artifacts remain in the repository; `backend/artifacts/` contains no files. The acceptance databases and smoke artifacts are under `/tmp`. The repository scan also found only ignored `.venv` dependency test `.pkl` fixtures and the ignored pre-existing `backend/pse_pulse_dev.db`; none is a commit candidate. No prohibited `file:///Users/` references were found in README, docs, or this report.
 
-Final destination identity remains `main` at `b87ef22c240dd64ef459bccef952062e76b0d5b4`. `git status --short`:
+### Historical pre-commit snapshot
+
+The following destination identity and status were recorded before the initial Phase 3A commit. They are preserved as historical evidence; the Phase 3A.3 section below records the current post-commit correction state.
+
+Final destination identity at that pre-commit snapshot was `main` at `b87ef22c240dd64ef459bccef952062e76b0d5b4`. `git status --short`:
 
 ```text
  M .github/workflows/ci.yml
@@ -109,3 +113,20 @@ Final destination identity remains `main` at `b87ef22c240dd64ef459bccef952062e76
 No files were staged, committed, or pushed. No Azure deployment or Phase 3B work was performed.
 
 RECOMMENDATION: READY FOR CHATGPT REVIEW BEFORE PHASE 3A COMMIT
+
+## Post-Commit CI Correction — Phase 3A.3
+
+- Initial Phase 3A commit: `adc9b2951aa1465c8376ffd6c7d08d584fed9f66` (`feat: add verified LIR and ARIMA forecasting foundation`).
+- Failed GitHub Actions run: `37011789268` (`PSE Pulse CI`). Backend reported 136 passed and 2 failed; frontend passed.
+- Root cause: the two development lifespan tests assumed `sectors` existed in the application engine. On a clean CI database, `AUTO_CREATE_SCHEMA=false` correctly leaves it absent, so application startup logic correctly skips demo seeding. The create-all test mocked `create_all`, which likewise did not create the table, and the readiness guard correctly skipped seeding.
+- Correction: extracted the existing read-only `inspect(engine).has_table("sectors")` check into `_database_schema_ready_for_seed()` and made the tests control schema readiness deterministically. Runtime behavior and Alembic-first safety are unchanged.
+- New coverage: schema readiness helper returns true/false based on the `sectors` table; lifespan skips seeding when the schema is missing and auto-create is off; seeds when a migrated schema is ready; seeds after the auto-create path only when readiness is true; and still skips seeding if readiness remains false after mocked `create_all`.
+- CI-style backend suite: `ENVIRONMENT=test DEMO_MODE=true DATABASE_URL="sqlite:///:memory:" backend/.venv/bin/pytest -v backend/tests` — **143 passed**.
+- Normal backend suite: `backend/.venv/bin/pytest -q backend/tests` — **143 passed**.
+- Backend compile: `backend/.venv/bin/python -m compileall backend/app backend/pipeline backend/alembic backend/tests` — PASS.
+- Dependencies: `backend/.venv/bin/pip check` — `No broken requirements found.`
+- Frontend: `npm run lint` — PASS; `npx tsc --noEmit` — PASS (rerun after the build completed; the first concurrent run overlapped `.next/types` generation); `npm run build` — PASS (26/26 static pages); `npm audit --omit=dev` — **0 vulnerabilities**.
+- LIR/ARIMA methodology and artifact contracts were not changed. No Azure deployment or Phase 3B work was performed.
+- No files staged, committed, or pushed. Correction scope: `backend/app/main.py`, `backend/tests/test_config.py`, and this report.
+
+RECOMMENDATION: READY FOR CHATGPT REVIEW BEFORE PHASE 3A.3 FIX COMMIT
