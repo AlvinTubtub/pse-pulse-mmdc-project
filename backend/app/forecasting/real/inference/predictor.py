@@ -7,12 +7,9 @@ from typing import Any
 import numpy as np
 
 from backend.app.forecasting.real.artifacts.loader import validate_artifact_against_history
-from backend.app.forecasting.real.artifacts.schema import (
-    ModelArtifactCompatibilityError,
-    ProductionModelMetadata,
-)
+from backend.app.forecasting.real.artifacts.schema import ModelArtifactCompatibilityError, ProductionModelMetadata
 from backend.app.forecasting.real.config import ModelId, RegressionFeatureConfig
-from backend.app.forecasting.real.domain import ModelForecast, OhlcvRecord
+from backend.app.forecasting.real.domain import ModelForecast, OhlcvRecord, require_chronological_records
 from backend.app.forecasting.real.features.regression_features import build_regression_origin_features
 from backend.app.forecasting.real.models.arima import FittedArimaModel
 from backend.app.forecasting.real.training.refit_lir import LIRFittedModel
@@ -42,13 +39,30 @@ def _regression_feature_config(payload: object) -> RegressionFeatureConfig:
 def predict_with_production_model(
     *,
     fitted_model: Any,
-    metadata: ProductionModelMetadata,
+    metadata: ProductionModelMetadata | Mapping[str, Any],
     records: Sequence[OhlcvRecord],
 ) -> ModelForecast:
     """Generate one next-session Close forecast from one verified production model."""
-    history = validate_artifact_against_history(metadata, records)
+    if isinstance(metadata, Mapping):
+        # LSTM metadata stays JSON-native so this module remains PyTorch-free.
+        try:
+            trained_through = metadata["trained_through"]
+            row_count = metadata["data_row_count"]
+            symbol = metadata["symbol"]
+            model_code = metadata["model_code"]
+        except KeyError as exc:
+            raise ModelArtifactCompatibilityError("Incomplete LSTM runtime metadata") from exc
+        history = tuple(records)
+        require_chronological_records(history)
+        if history[0].trading_date.isoformat() > trained_through:
+            raise ModelArtifactCompatibilityError("History does not reach the model training boundary")
+        if len(history) < row_count or history[row_count - 1].trading_date.isoformat() != trained_through:
+            raise ModelArtifactCompatibilityError("LSTM training boundary is incompatible with history")
+    else:
+        history = validate_artifact_against_history(metadata, records)
     origin_close = history[-1].close
-    code_upper = metadata.model_code.upper()
+    code_upper = (metadata["model_code"] if isinstance(metadata, Mapping) else metadata.model_code).upper()
+    model_code = metadata["model_code"] if isinstance(metadata, Mapping) else metadata.model_code
 
     if code_upper in ("LAG_REGRESSION", "LAG_REG"):
         if not isinstance(fitted_model, LIRFittedModel):
@@ -83,13 +97,33 @@ def predict_with_production_model(
         predicted_delta = predicted_close - origin_close
         model_id = ModelId.ARIMA
 
+    elif code_upper == "LSTM":
+        # The fitted model implementation imports torch in lstm_state only when it is loaded.
+        if not hasattr(fitted_model, "predict_delta_sequences"):
+            raise ModelArtifactCompatibilityError("Invalid in-memory LSTM model instance")
+        hyperparameters = metadata["hyperparameters"] if isinstance(metadata, Mapping) else metadata.hyperparameters
+        lookback = hyperparameters.get("lookback")
+        if isinstance(lookback, bool) or not isinstance(lookback, int) or lookback < 1:
+            raise ModelArtifactCompatibilityError("Invalid LSTM lookback in metadata")
+        if len(history) < lookback + 1:
+            raise ModelArtifactCompatibilityError("Insufficient observed history for LSTM lookback")
+        latest_deltas = np.asarray(
+            [history[index].close - history[index - 1].close for index in range(len(history) - lookback, len(history))],
+            dtype=np.float64,
+        )
+        if latest_deltas.shape != (lookback,) or not np.isfinite(latest_deltas).all():
+            raise ModelArtifactCompatibilityError("Invalid causal LSTM inference sequence")
+        predicted_delta = float(fitted_model.predict_delta_sequences(latest_deltas.reshape(1, -1))[0])
+        predicted_close = origin_close + predicted_delta
+        model_id = ModelId.LSTM
+
     else:
-        raise ModelArtifactCompatibilityError(f"Unsupported model code: {metadata.model_code}")
+        raise ModelArtifactCompatibilityError(f"Unsupported model code: {model_code}")
 
     if not math.isfinite(predicted_delta) or not math.isfinite(predicted_close):
-        raise RuntimeError(f"{metadata.model_code} produced non-finite prediction values")
+        raise RuntimeError(f"{model_code} produced non-finite prediction values")
     if predicted_close <= 0:
-        raise RuntimeError(f"{metadata.model_code} produced non-positive close: {predicted_close}")
+        raise RuntimeError(f"{model_code} produced non-positive close: {predicted_close}")
 
     return ModelForecast(
         model=model_id,

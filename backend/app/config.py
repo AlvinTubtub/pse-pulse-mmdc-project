@@ -101,6 +101,10 @@ class Settings(BaseSettings):
         default=False,
         description="Gate controlling activation of real model training and inference pipelines in production.",
     )
+    MODEL_ARTIFACT_ACTIVATION_ENABLED: bool = Field(
+        default=False,
+        description="Separate safety gate permitting explicit ModelArtifact activation operations.",
+    )
     MODEL_ARTIFACTS_DIR: str = Field(
         default="backend/artifacts/models",
         description="Directory for versioned production model artifacts.",

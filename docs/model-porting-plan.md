@@ -103,7 +103,7 @@ For the personal Azure deployment, we enforce a **strict separation of concerns*
 | **Input Shape** | $(N, L, 1)$ sequence of Close price deltas | Sequence of latest Close deltas |
 | **Training Engine**| PyTorch `torch.nn.LSTM` with Adam optimizer | Offline training on development machine |
 | **Inference Engine**| PyTorch state dict | Safe offline reload foundation; no production activation |
-| **Status**| **Phase 3B.1 foundation** | **All-15 bundle and production activation remain deferred** |
+| **Status**| **Phase 3B.1 foundation** | **All-15 bundle evaluated by Phase 3B.3; activation remains separately gated** |
 
 ---
 
@@ -180,7 +180,7 @@ Database lineage connects model binaries, execution runs, and forecasts:
 
 1. **Phase 3A — Complete:** Real LIR and ARIMA engines, causal features, trading calendar, refit primitives, safe artifact loading, database lineage, and acceptance.
 2. **Phase 3B.1 — Complete:** Pin and validate the official selected-configuration snapshot; port the canonical univariate PyTorch LSTM and safe state-dict artifact foundation.
-3. **Phase 3B.2 — Candidate bundle generation:** Build and verify all 45 authoritative artifacts for the canonical 15 companies. This phase does not activate artifacts or persist forecasts.
-4. **Phase 3B.3 — Deferred:** Independently evaluate the candidate bundle and gate any real forecast activation or Azure deployment.
+3. **Phase 3B.2 — Complete:** Freeze and verify the accepted all-15, 45-artifact production-candidate bundle. Its manifest identity is `2026.10.01-authoritative-v1` with SHA-256 `4225e60044f000b16147e01f6ff165968523c1efd9647e57d9c7a6f5f5a27454`.
+4. **Phase 3B.3 — Implemented / candidate evaluated; pending ChatGPT review:** Add manifest-driven LIR/ARIMA/LSTM runtime loading, lazy LSTM dependency loading, inactive-by-default artifact rows, explicit registration and atomic activation contracts, and non-persistent replay/current-history shadow evaluation. Evaluation eligibility does not activate artifacts; `MODEL_ARTIFACT_ACTIVATION_ENABLED` and `REAL_MODELS_ENABLED` remain false.
 
 The production application dependencies remain lightweight: PyTorch is isolated in `backend/requirements-lstm.txt` and the dedicated CPU LSTM CI job. The Phase 3A `backend/requirements-models.txt` remains unchanged. ONNX conversion and `onnxruntime` are deferred pending separate review after canonical PyTorch parity is accepted.

@@ -14,6 +14,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import relationship
 
@@ -47,7 +48,7 @@ class ModelArtifact(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
-    is_active = Column(Boolean, default=True, nullable=False)
+    is_active = Column(Boolean, default=False, server_default=text("false"), nullable=False)
 
     company = relationship("Company", backref="model_artifacts")
     model_metadata = relationship("ModelMetadata", backref="model_artifacts")

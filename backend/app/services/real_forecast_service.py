@@ -8,7 +8,6 @@ and committing all forecasts atomically within a single transaction.
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from decimal import Decimal
-import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -17,11 +16,7 @@ import uuid
 from sqlalchemy.orm import Session
 
 from backend.app.config import get_settings
-from backend.app.forecasting.real.artifacts.loader import (
-    load_bundle_for_symbol,
-    load_production_model,
-    validate_artifact_against_history,
-)
+from backend.app.forecasting.real.artifacts.runtime import load_runtime_artifact, read_verified_manifest
 from backend.app.forecasting.real.artifacts.schema import (
     ModelArtifactCompatibilityError,
     ProductionModelMetadata,
@@ -113,7 +108,7 @@ class RealForecastService:
         artifacts_root: Path | str,
         bundle_version: str,
         target_symbols: Optional[Sequence[str]] = None,
-        model_codes: Sequence[str] = (ModelId.LAG_REGRESSION.value, ModelId.ARIMA.value),
+        model_codes: Sequence[str] = (ModelId.LAG_REGRESSION.value, ModelId.ARIMA.value, ModelId.LSTM.value),
         dry_run: bool = False,
     ) -> RealForecastExecutionSummary:
         """Run real next-session inference across companies and persist atomically.
@@ -147,6 +142,8 @@ class RealForecastService:
             raise RealForecastingError(
                 f"Model bundle directory not found: {bundle_dir}"
             )
+        manifest, manifest_sha = read_verified_manifest(bundle_dir, expected_version=bundle_version)
+        entries_by_key = {(item["symbol"], item["model_code"]): item for item in manifest["entries"]}
 
         run_uuid = f"real-infer-{uuid.uuid4().hex[:12]}"
         now_utc = datetime.now(timezone.utc)
@@ -164,12 +161,12 @@ class RealForecastService:
         model_meta_map: Dict[str, ModelMetadata] = {}
         for m_code in model_codes:
             norm_code = _normalize_model_code(m_code)
-            meta = self.db.query(ModelMetadata).filter(ModelMetadata.code == norm_code).first()
-            if not meta:
+            matching_metadata = self.db.query(ModelMetadata).filter(ModelMetadata.code == norm_code).all()
+            if len(matching_metadata) != 1:
                 raise RealForecastingError(
-                    f"ModelMetadata record for code '{norm_code}' not found in database."
+                    f"Expected exactly one ModelMetadata record for code '{norm_code}', found {len(matching_metadata)}."
                 )
-            model_meta_map[norm_code] = meta
+            model_meta_map[norm_code] = matching_metadata[0]
 
         # 4. Initialize PipelineRun audit record if not dry-run
         pipeline_run: Optional[PipelineRun] = None
@@ -196,7 +193,6 @@ class RealForecastService:
         )
 
         forecasts_to_persist: List[Forecast] = []
-        artifacts_to_upsert: Dict[Tuple[int, int, str], ModelArtifact] = {}
 
         try:
             for company in companies:
@@ -214,28 +210,31 @@ class RealForecastService:
                 loaded_artifacts: List[Tuple[object, ProductionModelMetadata]] = []
                 for m_code in model_codes:
                     norm_code = _normalize_model_code(m_code)
-                    loaded = load_bundle_for_symbol(
-                        bundle_dir=bundle_dir,
+                    if (symbol, norm_code) not in entries_by_key:
+                        raise RealForecastingError(f"Manifest has no entry for {symbol}/{norm_code}")
+                    runtime_artifact = load_runtime_artifact(
+                        bundle_root=bundle_dir,
                         symbol=symbol,
-                        model_id=norm_code,
-                        expected_model_version=bundle_version,
+                        model_code=norm_code,
+                        expected_version=bundle_version,
+                        expected_manifest_sha256=manifest_sha,
                     )
-                    model_obj, art_meta = loaded
-                    if art_meta.symbol != symbol:
+                    model_obj, art_meta = runtime_artifact.model, runtime_artifact.metadata
+                    meta_symbol = art_meta.get("symbol") if isinstance(art_meta, dict) else art_meta.symbol
+                    meta_code = art_meta.get("model_code") if isinstance(art_meta, dict) else art_meta.model_code
+                    if meta_symbol != symbol:
                         raise RealForecastingError(
-                            f"Artifact symbol mismatch: artifact is for {art_meta.symbol}, expected {symbol}"
+                            f"Artifact symbol mismatch: artifact is for {meta_symbol}, expected {symbol}"
                         )
-                    if _normalize_model_code(art_meta.model_code) != norm_code:
+                    if _normalize_model_code(meta_code) != norm_code:
                         raise RealForecastingError(
-                            f"Artifact model code mismatch: artifact is {art_meta.model_code}, expected {norm_code}"
+                            f"Artifact model code mismatch: artifact is {meta_code}, expected {norm_code}"
                         )
-                    # Verify boundary compatibility against history
-                    validate_artifact_against_history(art_meta, history)
-                    loaded_artifacts.append(loaded)
+                    loaded_artifacts.append((model_obj, art_meta))
 
                 # Build loaded artifact lookup by normalized code
-                artifact_meta_by_code: Dict[str, ProductionModelMetadata] = {
-                    _normalize_model_code(meta.model_code): meta
+                artifact_meta_by_code: Dict[str, ProductionModelMetadata | dict] = {
+                    _normalize_model_code(meta.get("model_code") if isinstance(meta, dict) else meta.model_code): meta
                     for _, meta in loaded_artifacts
                 }
 
@@ -252,57 +251,33 @@ class RealForecastService:
                     meta_record = model_meta_map[norm_code]
                     art_meta = artifact_meta_by_code[norm_code]
 
-                    # Ensure ModelArtifact DB row exists or prepare it
-                    art_key = (company.id, meta_record.id, bundle_version)
-                    db_artifact = (
-                        self.db.query(ModelArtifact)
-                        .filter(
-                            ModelArtifact.company_id == company.id,
-                            ModelArtifact.model_metadata_id == meta_record.id,
-                            ModelArtifact.bundle_version == bundle_version,
+                    # Inference requires prior explicit activation and never writes artifact lineage.
+                    entry = entries_by_key[(symbol, norm_code)]
+                    active_rows = self.db.query(ModelArtifact).filter(
+                        ModelArtifact.company_id == company.id,
+                        ModelArtifact.model_metadata_id == meta_record.id,
+                        ModelArtifact.is_active.is_(True),
+                    ).all()
+                    if len(active_rows) != 1:
+                        raise RealForecastingError(
+                            f"Expected exactly one active artifact for {symbol}/{norm_code}, found {len(active_rows)}"
                         )
-                        .first()
-                    )
-
-                    if not db_artifact:
-                        if art_key in artifacts_to_upsert:
-                            db_artifact = artifacts_to_upsert[art_key]
-                        else:
-                            # Find artifact path
-                            art_filename = f"{norm_code.lower()}.joblib"
-                            art_file_path = bundle_dir / symbol / art_filename
-                            db_artifact = ModelArtifact(
-                                id=str(uuid.uuid4()),
-                                company_id=company.id,
-                                model_metadata_id=meta_record.id,
-                                bundle_version=bundle_version,
-                                artifact_format="joblib",
-                                artifact_path=str(art_file_path),
-                                artifact_sha256=art_meta.artifact_sha256,
-                                trained_through=art_meta.trained_through,
-                                data_row_count=art_meta.data_row_count,
-                                hyperparameters_json=json.dumps(art_meta.hyperparameters),
-                                source_repository=art_meta.source_repository,
-                                source_commit=art_meta.source_commit,
-                                historical_data_source_repository=art_meta.historical_data_source_repository,
-                                historical_data_source_commit=art_meta.historical_data_source_commit,
-                                is_active=True,
-                            )
-                            if not dry_run:
-                                self.db.add(db_artifact)
-                                self.db.flush()
-                            artifacts_to_upsert[art_key] = db_artifact
-                    else:
-                        if db_artifact.artifact_sha256 != art_meta.artifact_sha256:
-                            raise RealForecastIntegrityError(
-                                f"Database ModelArtifact SHA mismatch for {symbol} {norm_code}: "
-                                f"db={db_artifact.artifact_sha256} vs computed={art_meta.artifact_sha256}"
-                            )
-                        if db_artifact.company_id != company.id:
-                            raise RealForecastIntegrityError(
-                                f"Database ModelArtifact company mismatch for {symbol}: "
-                                f"db_company={db_artifact.company_id} vs {company.id}"
-                            )
+                    db_artifact = active_rows[0]
+                    runtime_metadata = art_meta if isinstance(art_meta, dict) else art_meta.as_dict()
+                    expected_lineage = {
+                        "bundle_version": bundle_version,
+                        "artifact_format": entry["artifact_format"],
+                        "artifact_path": entry["artifact_relative_path"],
+                        "artifact_sha256": entry["artifact_sha256"],
+                        "trained_through": date.fromisoformat(entry["trained_through"]),
+                        "data_row_count": entry["data_row_count"],
+                        "source_repository": runtime_metadata["source_repository"],
+                        "source_commit": runtime_metadata["source_commit"],
+                        "historical_data_source_repository": runtime_metadata["historical_data_source_repository"],
+                        "historical_data_source_commit": runtime_metadata["historical_data_source_commit"],
+                    }
+                    if any(getattr(db_artifact, key) != value for key, value in expected_lineage.items()):
+                        raise RealForecastIntegrityError(f"Active ModelArtifact lineage mismatch for {symbol}/{norm_code}")
 
                     incoming_price = Decimal(str(round(pred.predicted_close, 4)))
                     incoming_delta = Decimal(str(round(pred.predicted_delta, 4)))

@@ -72,6 +72,7 @@ jobs:
           CUDA_VISIBLE_DEVICES: ""
         run: |
           pytest -v \
+            backend/tests/test_phase3b3_gate_runtime.py \
             backend/tests/test_real_selections.py \
             backend/tests/test_real_lstm_dependency_boundary.py \
             backend/tests/test_real_lstm.py \

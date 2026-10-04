@@ -18,7 +18,7 @@ from backend.app.forecasting.real.inference.predictor import predict_with_produc
 def predict_next_day_with_artifacts(
     symbol: str,
     records: Sequence[OhlcvRecord],
-    loaded_artifacts: Sequence[tuple[Any, ProductionModelMetadata]],
+    loaded_artifacts: Sequence[tuple[Any, ProductionModelMetadata | dict[str, Any]]],
     *,
     calendar: PSETradingCalendar | None = None,
 ) -> CompanyNextDayForecast:
@@ -34,9 +34,10 @@ def predict_next_day_with_artifacts(
 
     predictions: list[NextDayPrediction] = []
     for fitted_model, metadata in loaded_artifacts:
-        if metadata.symbol != symbol:
+        metadata_symbol = metadata.get("symbol") if isinstance(metadata, dict) else metadata.symbol
+        if metadata_symbol != symbol:
             raise ValueError(
-                f"Artifact symbol mismatch: artifact is for {metadata.symbol}, expected {symbol}"
+                f"Artifact symbol mismatch: artifact is for {metadata_symbol}, expected {symbol}"
             )
         forecast = predict_with_production_model(
             fitted_model=fitted_model,
@@ -53,7 +54,7 @@ def predict_next_day_with_artifacts(
             predicted_close=forecast.predicted_close,
             inference_at=inference_timestamp,
             model_artifact_id=None,
-            bundle_version=metadata.model_version,
+            bundle_version=(metadata.get("model_version") if isinstance(metadata, dict) else metadata.model_version),
         )
         predictions.append(prediction)
 
