@@ -22,7 +22,7 @@ For the personal Azure deployment, we enforce a **strict separation of concerns*
 |  Output:   Serialized Model Artifacts                       |
 |            - arima_orders.json                              |
 |            - lir_pipeline.joblib                            |
-|            - lstm_model.onnx + lstm_scaler.joblib           |
+|            - lstm.pt state_dict + metadata (offline only)   |
 |            - manifest.json (SHA-256 Checksums)              |
 +-------------------------------------------------------------+
                               |
@@ -38,7 +38,7 @@ For the personal Azure deployment, we enforce a **strict separation of concerns*
                               v
 +-------------------------------------------------------------+
 |              AZURE PRODUCTION SERVING VM (B1s / B2s)        |
-|  Location: Linux Azure VM (FastAPI + ONNX Runtime)          |
+|  Location: Linux Azure VM (FastAPI; LSTM not activated)    |
 |  Compute:  Burstable 1-2 vCPU, <= 1-2 GB RAM                |
 |  Execution: Inference ONLY, 0 Training Cycles               |
 |  Speed:    < 150 ms per symbol                              |
@@ -95,15 +95,15 @@ For the personal Azure deployment, we enforce a **strict separation of concerns*
 
 ---
 
-### 2.3 Model 3: Long Short-Term Memory (LSTM) — Deferred to Phase 3B
+### 2.3 Model 3: Long Short-Term Memory (LSTM) — Phase 3B.1 foundation
 
 | Property | Research Baseline | Personal Azure Production Design (Phase 3B) |
 | :--- | :--- | :--- |
-| **Model Type** | Univariate Delta LSTM | PyTorch / ONNX Runtime Inference Engine |
+| **Model Type** | Univariate Close-delta LSTM | Canonical PyTorch state-dict implementation |
 | **Input Shape** | $(N, L, 1)$ sequence of Close price deltas | Sequence of latest Close deltas |
 | **Training Engine**| PyTorch `torch.nn.LSTM` with Adam optimizer | Offline training on development machine |
-| **Inference Engine**| PyTorch state dict or ONNX runtime | Decoupled lightweight inference |
-| **Status in Phase 3A**| **DEFERRED** | **DEFERRED (No PyTorch/TensorFlow in Phase 3A)** |
+| **Inference Engine**| PyTorch state dict | Safe offline reload foundation; no production activation |
+| **Status**| **Phase 3B.1 foundation** | **All-15 bundle and production activation remain deferred** |
 
 ---
 
@@ -176,5 +176,9 @@ Database lineage connects model binaries, execution runs, and forecasts:
 
 ## 5. Implementation Roadmap
 
-1. **Phase 3A (Current):** Real LIR engine, real ARIMA engine, causal feature pipeline, trading calendar, production refit primitives, artifact schema, safe artifact loader, database artifact lineage (Alembic 0005), and smoke testing.
-2. **Phase 3B:** Sourcing authoritative hyperparameter selections, all-15 offline bundle generation, full test evaluation, and production forecast activation.
+1. **Phase 3A — Complete:** Real LIR and ARIMA engines, causal features, trading calendar, refit primitives, safe artifact loading, database lineage, and acceptance.
+2. **Phase 3B.1 — This phase:** Pin and validate the official selected-configuration snapshot; port the canonical univariate PyTorch LSTM, its safe state-dict artifact foundation, and a BPI-only non-authoritative offline smoke.
+3. **Phase 3B.2 — Deferred:** Generate the all-15 production artifact bundle using the accepted authoritative configurations.
+4. **Phase 3B.3 — Deferred:** Evaluate the bundle and independently gate any real forecast activation. No LSTM activation or Azure deployment occurs in Phase 3B.1.
+
+The production application dependencies remain lightweight: PyTorch is isolated in `backend/requirements-lstm.txt` and the dedicated CPU LSTM CI job. The Phase 3A `backend/requirements-models.txt` remains unchanged. ONNX conversion and `onnxruntime` are deferred pending separate review after canonical PyTorch parity is accepted.

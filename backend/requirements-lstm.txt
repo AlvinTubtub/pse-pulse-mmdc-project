@@ -1,0 +1,3 @@
+# Offline/development-only CPU LSTM training and safe state-dict loading.
+# Keep this separate from requirements-models.txt and application requirements.
+torch>=2.2,<3.0

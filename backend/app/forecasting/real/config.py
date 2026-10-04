@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+import math
 
 
 class ModelId(StrEnum):
@@ -165,5 +166,77 @@ class ArimaConfig:
             raise ValueError(f"No trend options configured for d={differencing}") from exc
 
 
+@dataclass(frozen=True, slots=True)
+class LstmConfig:
+    """Official univariate LSTM search and chronological-stopping contract."""
+
+    lookback_lengths: tuple[int, ...] = (5, 10, 20)
+    hidden_sizes: tuple[int, ...] = (16, 32)
+    learning_rates: tuple[float, ...] = (0.001, 0.003)
+    batch_sizes: tuple[int, ...] = (32,)
+    tuning_seeds: tuple[int, ...] = (11, 29, 47)
+    cv_splits: int = 5
+    max_epochs: int = 100
+    early_stopping_patience: int = 10
+    early_stopping_min_delta: float = 1e-6
+    stopping_tail_proportion: float = 0.15
+    minimum_stopping_samples: int = 5
+    final_seed: int = 42
+
+    def __post_init__(self) -> None:
+        for name, values in (
+            ("lookback_lengths", self.lookback_lengths),
+            ("hidden_sizes", self.hidden_sizes),
+            ("batch_sizes", self.batch_sizes),
+        ):
+            if not values or any(value < 1 for value in values):
+                raise ValueError(f"{name} must contain positive integers")
+            if tuple(sorted(set(values))) != values:
+                raise ValueError(f"{name} must be unique and strictly increasing")
+        if (
+            not self.learning_rates
+            or any(value <= 0 for value in self.learning_rates)
+            or tuple(sorted(set(self.learning_rates))) != self.learning_rates
+        ):
+            raise ValueError("learning_rates must be positive and strictly increasing")
+        if self.tuning_seeds != (11, 29, 47):
+            raise ValueError("tuning_seeds must remain exactly (11, 29, 47)")
+        if self.cv_splits != 5 or self.final_seed != 42:
+            raise ValueError("Official LSTM cv_splits and final_seed are fixed at 5 and 42")
+        if self.max_epochs < 1 or self.early_stopping_patience < 1:
+            raise ValueError("Epoch limit and patience must be positive")
+        if self.early_stopping_min_delta < 0:
+            raise ValueError("early_stopping_min_delta cannot be negative")
+        if not 0 < self.stopping_tail_proportion < 1:
+            raise ValueError("stopping_tail_proportion must be between zero and one")
+        if self.minimum_stopping_samples < 1:
+            raise ValueError("minimum_stopping_samples must be positive")
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class LstmSpecification:
+    """One centrally configured univariate Close-delta LSTM specification."""
+
+    lookback: int
+    hidden_size: int
+    learning_rate: float
+    batch_size: int
+
+    def __post_init__(self) -> None:
+        if self.lookback < 1 or self.hidden_size < 1 or self.batch_size < 1:
+            raise ValueError("LSTM integer hyperparameters must be positive")
+        if not math.isfinite(self.learning_rate) or self.learning_rate <= 0:
+            raise ValueError("LSTM learning_rate must be positive and finite")
+
+    def as_dict(self) -> dict[str, int | float]:
+        return {
+            "lookback": self.lookback,
+            "hidden_size": self.hidden_size,
+            "learning_rate": self.learning_rate,
+            "batch_size": self.batch_size,
+        }
+
+
 DEFAULT_LAG_REGRESSION_CONFIG = LagRegressionConfig()
 DEFAULT_ARIMA_CONFIG = ArimaConfig()
+DEFAULT_LSTM_CONFIG = LstmConfig()

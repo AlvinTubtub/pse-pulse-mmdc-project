@@ -42,6 +42,41 @@ jobs:
           python -m compileall backend/app backend/pipeline
           pytest -v
 
+  lstm-selection-test:
+    name: LSTM & Selection Tests (CPU)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-models.txt
+            backend/requirements-lstm.txt
+
+      - name: Install CPU LSTM test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-models.txt
+          pip install -r backend/requirements-lstm.txt
+
+      - name: Run selection and LSTM methodology tests
+        env:
+          CUDA_VISIBLE_DEVICES: ""
+        run: |
+          pytest -v \
+            backend/tests/test_real_selections.py \
+            backend/tests/test_real_lstm_dependency_boundary.py \
+            backend/tests/test_real_lstm.py \
+            backend/tests/test_real_lstm_artifacts.py
+
   frontend-build:
     name: Frontend Lint, Typecheck & Static Export
     runs-on: ubuntu-latest
