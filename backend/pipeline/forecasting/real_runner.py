@@ -13,6 +13,7 @@ from typing import Optional, Sequence
 
 from backend.app.config import get_settings
 from backend.app.database import SessionLocal
+from backend.app.forecasting.real.artifacts.bundle import ACCEPTANCE_BUNDLE_VERSION
 from backend.app.forecasting.real.config import ModelId
 from backend.app.services.real_forecast_service import (
     RealForecastService,
@@ -42,8 +43,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--bundle-version",
         type=str,
-        default="2026.03.01-v1",
-        help="Model artifact bundle version to load (e.g. '2026.03.01-v1')",
+        default=ACCEPTANCE_BUNDLE_VERSION,
+        help=f"Model artifact bundle version to load (default: {ACCEPTANCE_BUNDLE_VERSION})",
     )
     parser.add_argument(
         "--symbols",
@@ -54,8 +55,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--models",
         type=str,
-        default="LAG_REGRESSION,ARIMA",
-        help="Comma-separated models to evaluate (e.g. 'LAG_REGRESSION,ARIMA')",
+        default="LAG_REGRESSION,ARIMA,LSTM",
+        help="Comma-separated models to evaluate (default: LAG_REGRESSION,ARIMA,LSTM)",
     )
     parser.add_argument(
         "--dry-run",
@@ -67,9 +68,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def run_real_pipeline(
     artifacts_dir: Path,
-    bundle_version: str,
+    bundle_version: str = ACCEPTANCE_BUNDLE_VERSION,
     symbols: Optional[Sequence[str]] = None,
-    models: Sequence[str] = ("LAG_REGRESSION", "ARIMA"),
+    models: Sequence[str] = ("LAG_REGRESSION", "ARIMA", "LSTM"),
     dry_run: bool = False,
 ) -> int:
     """Run real forecasting pipeline and persist records atomically."""

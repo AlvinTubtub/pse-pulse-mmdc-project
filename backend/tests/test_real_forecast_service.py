@@ -19,7 +19,12 @@ from backend.app.models.pipeline_run import PipelineRun
 from backend.app.models.price import DailyPrice
 from backend.app.models.sector import Sector
 from backend.app.services import real_forecast_service as service_module
-from backend.app.services.real_forecast_service import RealForecastingError, RealForecastService, RealModelsDisabledError
+from backend.app.services.real_forecast_service import (
+    RealForecastIntegrityError,
+    RealForecastingError,
+    RealForecastService,
+    RealModelsDisabledError,
+)
 
 BUNDLE = "2026.10.01-authoritative-v1"
 FAMILIES = ("LAG_REGRESSION", "ARIMA", "LSTM")
@@ -136,17 +141,32 @@ def test_disabled_real_forecasting_stays_disabled(monkeypatch, db_session, tmp_p
         RealForecastService(db_session).generate_and_persist_forecasts(root, BUNDLE, target_symbols=["BPI"], model_codes=FAMILIES)
 
 
-@pytest.mark.parametrize("tamper", ["artifact_sha256", "artifact_path", "artifact_format", "bundle_version", "trained_through", "data_row_count", "source_commit"])
+@pytest.mark.parametrize("tamper", [
+    "artifact_sha256", "artifact_path", "artifact_format", "bundle_version",
+    "trained_through", "data_row_count", "source_repository", "source_commit",
+    "historical_data_source_repository", "historical_data_source_commit",
+])
 def test_serving_rejects_mismatched_active_lineage(monkeypatch, db_session, tmp_path, tamper):
     root, _ = _setup_service(monkeypatch, db_session, tmp_path, tamper=tamper)
     with pytest.raises(RealForecastingError, match="lineage mismatch"):
         RealForecastService(db_session).generate_and_persist_forecasts(root, BUNDLE, target_symbols=["BPI"], model_codes=FAMILIES)
+    assert db_session.query(Forecast).filter(Forecast.is_demo.is_(False)).count() == 0
+
+
+def test_serving_rejects_inactive_candidate_lineage(monkeypatch, db_session, tmp_path):
+    root, _ = _setup_service(monkeypatch, db_session, tmp_path)
+    db_session.query(ModelArtifact).filter_by(id="artifact-LAG_REGRESSION").one().is_active = False
+    db_session.commit()
+    with pytest.raises(RealForecastingError, match="exactly one active"):
+        RealForecastService(db_session).generate_and_persist_forecasts(root, BUNDLE, target_symbols=["BPI"], model_codes=FAMILIES)
+    assert db_session.query(Forecast).filter(Forecast.is_demo.is_(False)).count() == 0
 
 
 def test_serving_rejects_missing_and_duplicate_active_rows(monkeypatch, db_session, tmp_path):
     root, _ = _setup_service(monkeypatch, db_session, tmp_path, active=False)
     with pytest.raises(RealForecastingError, match="exactly one active"):
         RealForecastService(db_session).generate_and_persist_forecasts(root, BUNDLE, target_symbols=["BPI"], model_codes=FAMILIES)
+    assert db_session.query(Forecast).filter(Forecast.is_demo.is_(False)).count() == 0
 
 
 def test_serving_rejects_duplicate_active_lineage(monkeypatch, db_session, tmp_path):
@@ -165,6 +185,39 @@ def test_serving_rejects_duplicate_active_lineage(monkeypatch, db_session, tmp_p
     db_session.commit()
     with pytest.raises(RealForecastingError, match="exactly one active"):
         RealForecastService(db_session).generate_and_persist_forecasts(root, BUNDLE, target_symbols=["BPI"], model_codes=FAMILIES)
+    assert db_session.query(Forecast).filter(Forecast.is_demo.is_(False)).count() == 0
+
+
+@pytest.mark.parametrize("tamper", ["artifact", "origin", "price", "delta"])
+def test_existing_real_forecast_is_immutable(monkeypatch, db_session, tmp_path, tamper):
+    root, history = _setup_service(monkeypatch, db_session, tmp_path)
+    artifact = db_session.query(ModelArtifact).filter_by(id="artifact-LAG_REGRESSION").one()
+    target = PSETradingCalendar().next_trading_day(history[-1].trading_date)
+    existing = Forecast(
+        company_id=1,
+        model_id=1,
+        model_artifact_id="artifact-ARIMA" if tamper == "artifact" else artifact.id,
+        origin_date=history[-1].trading_date if tamper != "origin" else history[-2].trading_date,
+        target_date=target,
+        predicted_price=history[-1].close + (0.75 if tamper == "price" else 0.5),
+        predicted_delta=0.75 if tamper == "delta" else 0.5,
+        confidence_level=0.95,
+        is_demo=False,
+    )
+    db_session.add(existing)
+    db_session.commit()
+    before_id = existing.id
+    before_values = (existing.model_artifact_id, existing.origin_date, existing.predicted_price, existing.predicted_delta)
+
+    with pytest.raises(RealForecastIntegrityError, match="Overwrites are forbidden"):
+        RealForecastService(db_session).generate_and_persist_forecasts(
+            root, BUNDLE, target_symbols=["BPI"], model_codes=FAMILIES,
+        )
+
+    persisted = db_session.query(Forecast).filter(Forecast.is_demo.is_(False)).all()
+    assert len(persisted) == 1
+    assert persisted[0].id == before_id
+    assert (persisted[0].model_artifact_id, persisted[0].origin_date, persisted[0].predicted_price, persisted[0].predicted_delta) == before_values
 
 
 def test_valid_active_lineage_serves_without_creating_artifact_rows(monkeypatch, db_session, tmp_path):
@@ -185,3 +238,52 @@ def test_valid_active_lineage_serves_without_creating_artifact_rows(monkeypatch,
     assert persisted_families == {"LAG_REGRESSION", "ARIMA", "LSTM"}
     assert db_session.query(ModelArtifact).count() == before_artifacts
     assert db_session.query(PipelineRun).filter(PipelineRun.is_demo_run.is_(False)).count() == 1
+
+
+def test_success_path_uses_one_commit_for_forecasts_and_completed_run(monkeypatch, db_session, tmp_path):
+    root, _ = _setup_service(monkeypatch, db_session, tmp_path)
+    original_commit = db_session.commit
+    commit_count = 0
+
+    def count_commit():
+        nonlocal commit_count
+        commit_count += 1
+        return original_commit()
+
+    monkeypatch.setattr(db_session, "commit", count_commit)
+    result = RealForecastService(db_session).generate_and_persist_forecasts(
+        root, BUNDLE, target_symbols=["BPI"], model_codes=FAMILIES,
+    )
+
+    assert commit_count == 1
+    assert result.total_forecasts_persisted == 3
+    completed_run = db_session.query(PipelineRun).filter_by(run_id=result.run_id).one()
+    assert completed_run.status == "COMPLETED"
+    assert completed_run.completed_at is not None
+    assert completed_run.forecasts_generated == 3
+
+
+def test_commit_failure_rolls_back_forecasts_and_writes_failed_audit(monkeypatch, db_session, tmp_path):
+    root, _ = _setup_service(monkeypatch, db_session, tmp_path)
+    original_commit = db_session.commit
+    calls = 0
+
+    def fail_first_commit():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("injected success commit failure")
+        return original_commit()
+
+    monkeypatch.setattr(db_session, "commit", fail_first_commit)
+    with pytest.raises(RealForecastingError, match="injected success commit failure"):
+        RealForecastService(db_session).generate_and_persist_forecasts(
+            root, BUNDLE, target_symbols=["BPI"], model_codes=FAMILIES,
+        )
+
+    assert db_session.query(Forecast).filter(Forecast.is_demo.is_(False)).count() == 0
+    failed_runs = db_session.query(PipelineRun).filter(PipelineRun.is_demo_run.is_(False)).all()
+    assert len(failed_runs) == 1
+    assert failed_runs[0].status == "FAILED"
+    assert failed_runs[0].run_id.startswith("real-infer-")
+    assert "injected success commit failure" in failed_runs[0].error_message

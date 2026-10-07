@@ -180,12 +180,11 @@ class RealForecastService:
                 is_demo_run=False,
             )
             self.db.add(pipeline_run)
-            self.db.flush()
 
         summary = RealForecastExecutionSummary(
             run_id=run_uuid,
             status="RUNNING",
-            pipeline_run_id=pipeline_run.id if pipeline_run else None,
+            pipeline_run_id=None,
             total_companies=len(companies),
             total_forecasts_generated=0,
             total_forecasts_persisted=0,
@@ -195,6 +194,10 @@ class RealForecastService:
         forecasts_to_persist: List[Forecast] = []
 
         try:
+            if pipeline_run:
+                self.db.flush()
+                summary.pipeline_run_id = pipeline_run.id
+
             for company in companies:
                 symbol = company.symbol
                 summary.symbols_processed.append(symbol)
@@ -378,15 +381,14 @@ class RealForecastService:
                     )
 
             if not dry_run:
-                # Flush and commit atomically
-                self.db.flush()
-                self.db.commit()
-                summary.total_forecasts_persisted = len(forecasts_to_persist)
+                # Complete the audit row and forecasts in one transaction.
                 if pipeline_run:
                     pipeline_run.status = "COMPLETED"
                     pipeline_run.completed_at = datetime.now(timezone.utc)
                     pipeline_run.forecasts_generated = len(forecasts_to_persist)
-                    self.db.commit()
+                self.db.flush()
+                self.db.commit()
+                summary.total_forecasts_persisted = len(forecasts_to_persist)
             else:
                 summary.total_forecasts_persisted = 0
                 logger.info("Dry-run complete: 0 database mutations committed.")
@@ -403,17 +405,20 @@ class RealForecastService:
 
             if not dry_run and pipeline_run:
                 try:
-                    # Record failure audit record in a fresh transaction
-                    fail_run = (
-                        self.db.query(PipelineRun)
-                        .filter(PipelineRun.id == pipeline_run.id)
-                        .first()
+                    # Rollback removes the RUNNING row; create the failure audit
+                    # explicitly in a fresh transaction using the same run ID.
+                    failed_run = PipelineRun(
+                        run_id=run_uuid,
+                        status="FAILED",
+                        started_at=now_utc,
+                        completed_at=datetime.now(timezone.utc),
+                        records_ingested=0,
+                        forecasts_generated=0,
+                        error_message=str(exc),
+                        is_demo_run=False,
                     )
-                    if fail_run:
-                        fail_run.status = "FAILED"
-                        fail_run.completed_at = datetime.now(timezone.utc)
-                        fail_run.error_message = str(exc)
-                        self.db.commit()
+                    self.db.add(failed_run)
+                    self.db.commit()
                 except Exception as inner_exc:
                     logger.error("Failed to update PipelineRun status: %s", inner_exc)
                     self.db.rollback()

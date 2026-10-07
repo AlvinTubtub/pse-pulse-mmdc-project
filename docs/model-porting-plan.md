@@ -103,7 +103,7 @@ For the personal Azure deployment, we enforce a **strict separation of concerns*
 | **Input Shape** | $(N, L, 1)$ sequence of Close price deltas | Sequence of latest Close deltas |
 | **Training Engine**| PyTorch `torch.nn.LSTM` with Adam optimizer | Offline training on development machine |
 | **Inference Engine**| PyTorch state dict | Safe offline reload foundation; no production activation |
-| **Status**| **Phase 3B.1 foundation** | **All-15 bundle evaluated by Phase 3B.3; activation remains separately gated** |
+| **Status**| **Phase 3B.1 foundation** | **Phase 3B.3 complete; exact candidate activated and validated only in the isolated Phase 3B.4 local database** |
 
 ---
 
@@ -181,6 +181,7 @@ Database lineage connects model binaries, execution runs, and forecasts:
 1. **Phase 3A — Complete:** Real LIR and ARIMA engines, causal features, trading calendar, refit primitives, safe artifact loading, database lineage, and acceptance.
 2. **Phase 3B.1 — Complete:** Pin and validate the official selected-configuration snapshot; port the canonical univariate PyTorch LSTM and safe state-dict artifact foundation.
 3. **Phase 3B.2 — Complete:** Freeze and verify the accepted all-15, 45-artifact production-candidate bundle. Its manifest identity is `2026.10.01-authoritative-v1` with SHA-256 `4225e60044f000b16147e01f6ff165968523c1efd9647e57d9c7a6f5f5a27454`.
-4. **Phase 3B.3 — Implemented / candidate evaluated; pending ChatGPT review:** Add manifest-driven LIR/ARIMA/LSTM runtime loading, lazy LSTM dependency loading, inactive-by-default artifact rows, explicit registration and atomic activation contracts, and non-persistent replay/current-history shadow evaluation. Evaluation eligibility does not activate artifacts; `MODEL_ARTIFACT_ACTIVATION_ENABLED` and `REAL_MODELS_ENABLED` remain false.
+4. **Phase 3B.3 — Complete:** Add manifest-driven LIR/ARIMA/LSTM runtime loading, lazy LSTM dependency loading, inactive-by-default artifact rows, explicit registration and atomic activation contracts, and non-persistent replay/current-history shadow evaluation. Its accepted evaluation eligibility remains historical evidence; its activation plan still records `executed: false`.
+5. **Phase 3B.4 — Implemented / local activation validated; pending ChatGPT review:** Clone the local SQLite source with SQLite's backup API to an external validation database, migrate only the clone to 0006, register and activate the exact 45 candidate rows, run and persist all 45 lineage-backed forecasts, prove fresh-process reload and second-run idempotency, and verify read-only API visibility. This does not change the normal false safety defaults or deploy Azure.
 
 The production application dependencies remain lightweight: PyTorch is isolated in `backend/requirements-lstm.txt` and the dedicated CPU LSTM CI job. The Phase 3A `backend/requirements-models.txt` remains unchanged. ONNX conversion and `onnxruntime` are deferred pending separate review after canonical PyTorch parity is accepted.
