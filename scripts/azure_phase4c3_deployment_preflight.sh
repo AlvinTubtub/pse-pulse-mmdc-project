@@ -69,7 +69,7 @@ while IFS= read -r line; do
   [[ -z "$line" ]] && continue
   path="${line:3}"
   [[ "$line" == '?? '* ]] || stop_gate NO_GO_REPOSITORY_BASELINE "tracked change exists: $path"
-  case "$path" in PHASE4C3_DEPLOYMENT_READINESS_REPORT.md|scripts/azure_phase4c3_deployment_preflight.sh|PHASE4C3_OWNER_DEPLOYMENT_AUTHORIZATION_CHECKLIST.md) ;; *) stop_gate NO_GO_REPOSITORY_BASELINE "unexpected untracked path: $path" ;; esac
+  case "$path" in PHASE4C3_DEPLOYMENT_READINESS_REPORT.md|scripts/azure_phase4c3_deployment_preflight.sh|PHASE4C3_OWNER_DEPLOYMENT_AUTHORIZATION_CHECKLIST.md|backend/tests/test_phase4c3_postgres_capability.py) ;; *) stop_gate NO_GO_REPOSITORY_BASELINE "unexpected untracked path: $path" ;; esac
 done < <(git status --porcelain --untracked-files=all)
 
 git diff --quiet "$PHASE4C2_BASE" HEAD -- infra scripts/azure_phase4c2_post_registration_validate.sh backend/tests/test_phase4b_iac_safety.py || stop_gate NO_GO_IAC_INTEGRITY 'Phase 4B or Phase 4C.2 implementation files changed'
@@ -190,29 +190,169 @@ print(json.dumps({k:latest.get(k) for k in ('publisher','offer','sku','version',
 PY
 then stop_gate NO_GO_UBUNTU_IMAGE 'Canonical Ubuntu 24.04 x64 image is unavailable'; fi
 
-safe_az postgres flexible-server list-skus --location "$REGION" --output json >"$EVIDENCE_DIR/postgres-skus.json" || stop_gate NO_GO_POSTGRES_RESTRICTED 'PostgreSQL SKU catalog query failed'
-if ! python3 - "$EVIDENCE_DIR/postgres-skus.json" >"$EVIDENCE_DIR/postgres-summary.json" <<'PY'
-import json,sys
-doc=json.load(open(sys.argv[1])); locations=doc if isinstance(doc,list) else doc.get('value',[])
-def available(x):return str(x or '')=='Available'
-evaluated=[]
-for location in locations:
- if not isinstance(location,dict):continue
- tiers=location.get('supportedServerEditions',[])
- burstable=[]
- for tier in tiers:
-  if not isinstance(tier,dict) or str(tier.get('name','')).lower()!='burstable' or not available(tier.get('status')):continue
-  for sku in tier.get('supportedServerSkus',[]):
-   if isinstance(sku,dict) and str(sku.get('name','')).lower()=='standard_b1ms' and available(sku.get('status')) and not sku.get('reason'):
-    burstable.append({'tierStatus':tier.get('status'),'skuStatus':sku.get('status')})
- versions=[v for v in location.get('supportedServerVersions',[]) if isinstance(v,dict) and str(v.get('name',''))=='16' and available(v.get('status'))]
- evaluated.append({'locationStatus':location.get('status'),'restricted':location.get('restricted'),'b1msBurstable':burstable,'postgres16':[v.get('status') for v in versions]})
-passed=[x for x in evaluated if str(x.get('restricted','')).lower()=='disabled' and x['b1msBurstable'] and x['postgres16']]
-out={'capabilityLocations':evaluated,'standardB1msBurstableAvailable':bool(passed),'postgres16Supported':bool(passed)}
-print(json.dumps(out,indent=2))
-if not passed:raise SystemExit('Standard_B1ms Burstable and PostgreSQL 16 support is not explicitly available or the location is restricted')
-PY
-then stop_gate NO_GO_POSTGRES_RESTRICTED 'Standard_B1ms Burstable/PostgreSQL 16 capability failed; no substitution was made'; fi
+safe_az postgres flexible-server list-skus --location "$REGION" --output json >"$EVIDENCE_DIR/postgres-skus.json" || stop_gate NO_GO_POSTGRES_CAPABILITY_INDETERMINATE 'PostgreSQL SKU catalog query failed; availability cannot be established'
+if ! python3 - "$EVIDENCE_DIR/postgres-skus.json" "$REGION" >"$EVIDENCE_DIR/postgres-summary.json" <<'POSTGRES_CAPABILITY_PARSER'
+import json,re,sys
+
+def field(obj,key):
+ if key not in obj:return {'state':'ABSENT'}
+ value=obj[key]
+ if value is None:return {'state':'NULL','value':None}
+ if isinstance(value,str):return {'state':'VALUE','value':value}
+ return {'state':'UNEXPECTED_TYPE','valueType':type(value).__name__}
+
+def safe_reason(obj):
+ item=field(obj,'reason')
+ if item.get('state')!='VALUE' or not item.get('value','').strip():return item
+ value=item['value'].strip()
+ value=re.sub(r'(?i)(/subscriptions/)[0-9a-f-]{36}',r'\1<redacted>',value)
+ value=re.sub(r'(?i)\b[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b','<redacted-guid>',value)
+ value=re.sub(r'(?i)\b(password|secret|token)\s*[:=]\s*\S+',r'\1=<redacted>',value)
+ return {'state':'VALUE','value':value}
+
+def matches(rows,key,value,fold=False):
+ result=[]
+ if not isinstance(rows,list):return result
+ for row in rows:
+  if not isinstance(row,dict):continue
+  actual=row.get(key)
+  if (isinstance(actual,str) and actual.lower()==value.lower()) if fold else actual==value:
+   result.append(row)
+ return result
+
+def region_identity(obj,target):
+ keys=('location','region','locationName','regionName','locationId','regionId')
+ found=[]
+ for key in keys:
+  if key not in obj:continue
+  value=obj[key]
+  if not isinstance(value,str) or not value.strip():
+   return {'state':'INVALID','sourceField':key}
+  normalized=value.strip().rstrip('/').split('/')[-1].strip().lower()
+  if not normalized:
+   return {'state':'INVALID','sourceField':key}
+  found.append((key,normalized))
+ if not found:
+  return {'state':'ABSENT','scope':'requested location query'}
+ mismatched=[(key,value) for key,value in found if value!=target.strip().lower()]
+ if mismatched:
+  return {'state':'CONFLICT','sourceFields':[key for key,_ in found],
+          'observedRegions':sorted(set(value for _,value in found))}
+ return {'state':'VALUE','sourceFields':[key for key,_ in found],
+         'observedRegions':sorted(set(value for _,value in found)),
+         'matchesTarget':True}
+
+try:
+ with open(sys.argv[1],encoding='utf-8') as source: doc=json.load(source)
+ parse_error=None
+except Exception as exc:
+ doc=None
+ parse_error=type(exc).__name__
+
+locations=doc if isinstance(doc,list) else (doc.get('value',[]) if isinstance(doc,dict) else [])
+if not isinstance(locations,list):locations=[]
+records=[row for row in locations if isinstance(row,dict)]
+location=records[0] if len(records)==1 else {}
+region=region_identity(location,sys.argv[2])
+tiers=matches(location.get('supportedServerEditions'), 'name','Burstable',True)
+tier=tiers[0] if len(tiers)==1 else {}
+skus=matches(tier.get('supportedServerSkus'), 'name','Standard_B1ms',True)
+sku=skus[0] if len(skus)==1 else {}
+versions=matches(location.get('supportedServerVersions'), 'name','16')
+version=versions[0] if len(versions)==1 else {}
+
+components=[('Burstable tier',tier),('Standard_B1ms SKU',sku),('PostgreSQL 16',version)]
+summary={
+ 'targetRegion':sys.argv[2],
+ 'capabilityRecordCount':len(records),
+ 'locationName':location.get('name') if isinstance(location.get('name'),str) else None,
+ 'recordRegion':region,
+ 'locationStatus':field(location,'status'),
+ 'locationRestricted':field(location,'restricted'),
+ 'burstable':{'listed':len(tiers)==1,'status':field(tier,'status'),'reason':safe_reason(tier)},
+ 'standardB1ms':{'listed':len(skus)==1,'status':field(sku,'status'),'reason':safe_reason(sku)},
+ 'postgres16':{'listed':len(versions)==1,'status':field(version,'status'),'reason':safe_reason(version)},
+}
+
+blocking=[]
+if field(location,'restricted').get('state')=='VALUE' and field(location,'restricted').get('value')=='Enabled':
+ blocking.append('Location is explicitly restricted (restricted=Enabled).')
+if field(location,'status').get('state')=='VALUE' and field(location,'status').get('value')=='Disabled':
+ blocking.append('Location capability status is explicitly Disabled.')
+for label,obj in components:
+ status=field(obj,'status')
+ if status.get('state')=='VALUE' and status.get('value')=='Disabled':
+  blocking.append(f'{label} is explicitly Disabled.')
+ reason=safe_reason(obj)
+ if reason.get('state')=='VALUE' and reason.get('value'):
+  blocking.append(f'{label} has an explicit provider reason: {reason["value"]}')
+location_reason=safe_reason(location)
+if location_reason.get('state')=='VALUE' and location_reason.get('value'):
+ blocking.append(f'Location has an explicit provider reason: {location_reason["value"]}')
+
+if parse_error:
+ classification='INDETERMINATE'
+ stop_reason=f'Capability response could not be parsed ({parse_error}).'
+elif len(records)!=1:
+ classification='INDETERMINATE'
+ stop_reason=f'Expected exactly one capability record for {sys.argv[2]}; found {len(records)}.'
+elif region.get('state') in ('CONFLICT','INVALID','UNEXPECTED_TYPE'):
+ classification='INDETERMINATE'
+ stop_reason='Capability record has an explicit region identifier that conflicts with or cannot be matched to the requested region.'
+elif blocking:
+ classification='EXPLICITLY_RESTRICTED'
+ stop_reason=' '.join(blocking)
+else:
+ absent=[]
+ if len(tiers)==0:absent.append('Burstable tier is not listed')
+ elif len(tiers)>1:absent.append('Burstable tier has ambiguous duplicate entries')
+ if len(tiers)==1 and len(skus)==0:absent.append('Standard_B1ms SKU is not listed under Burstable')
+ elif len(skus)>1:absent.append('Standard_B1ms has ambiguous duplicate entries')
+ if len(versions)==0:absent.append('PostgreSQL major version 16 is not listed')
+ elif len(versions)>1:absent.append('PostgreSQL 16 has ambiguous duplicate entries')
+ unknown=[]
+ loc_status=field(location,'status')
+ if loc_status.get('state')=='NULL':unknown.append('location status is null')
+ elif loc_status.get('state')=='ABSENT':unknown.append('location status is absent')
+ elif loc_status.get('state')!='VALUE' or loc_status.get('value')!='Available':
+  unknown.append('location status is not explicitly Available')
+ for label,obj in components:
+  if not obj:continue
+  status=field(obj,'status')
+  if status.get('state')=='NULL':unknown.append(f'{label} status is null')
+  elif status.get('state')=='ABSENT':unknown.append(f'{label} status is absent')
+  elif status.get('state')!='VALUE' or status.get('value')!='Available':
+   unknown.append(f'{label} status is not explicitly Available')
+  reason=safe_reason(obj)
+  if reason.get('state')=='UNEXPECTED_TYPE':unknown.append(f'{label} reason has an unexpected type')
+ restricted=field(location,'restricted')
+ if restricted.get('state')=='NULL':unknown.append('location restricted state is null')
+ elif restricted.get('state')=='ABSENT':unknown.append('location restricted state is absent')
+ elif restricted.get('state')!='VALUE' or restricted.get('value')!='Disabled':
+  unknown.append('location is not explicitly confirmed unrestricted')
+ if safe_reason(location).get('state')=='UNEXPECTED_TYPE':
+  unknown.append('location reason has an unexpected type')
+ if absent or unknown:
+  classification='INDETERMINATE'
+  stop_reason='; '.join(absent+unknown)+'.'
+ else:
+  classification='AVAILABLE'
+  stop_reason='Exact Burstable / Standard_B1ms / PostgreSQL 16 candidate and location status are explicitly Available; location restricted is Disabled.'
+
+summary['blockingReasons']=blocking
+summary['classification']=classification
+summary['stopReason']=stop_reason
+print(json.dumps(summary,indent=2))
+POSTGRES_CAPABILITY_PARSER
+then stop_gate NO_GO_POSTGRES_CAPABILITY_INDETERMINATE 'PostgreSQL capability parser failed; availability cannot be established'; fi
+PG_CLASSIFICATION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["classification"])' "$EVIDENCE_DIR/postgres-summary.json")" || stop_gate NO_GO_POSTGRES_CAPABILITY_INDETERMINATE 'PostgreSQL capability summary could not be parsed'
+PG_STOP_REASON="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["stopReason"])' "$EVIDENCE_DIR/postgres-summary.json")" || stop_gate NO_GO_POSTGRES_CAPABILITY_INDETERMINATE 'PostgreSQL capability stop reason could not be read'
+case "$PG_CLASSIFICATION" in
+  AVAILABLE) ;;
+  EXPLICITLY_RESTRICTED) stop_gate NO_GO_POSTGRES_RESTRICTED "$PG_STOP_REASON" ;;
+  INDETERMINATE) stop_gate NO_GO_POSTGRES_CAPABILITY_INDETERMINATE "$PG_STOP_REASON" ;;
+  *) stop_gate NO_GO_POSTGRES_CAPABILITY_INDETERMINATE 'PostgreSQL capability classifier returned an unknown classification' ;;
+esac
 
 echo '[4C.3 Gate A] Compiling the Bicep template locally.'
 if ! safe_az bicep build --file infra/main.bicep --stdout >"$EVIDENCE_DIR/bicep-build.json" 2>"$EVIDENCE_DIR/bicep-build.stderr"; then stop_gate NO_GO_IAC_COMPILE 'local Bicep compilation failed; ARM validation and What-If were not run'; fi
