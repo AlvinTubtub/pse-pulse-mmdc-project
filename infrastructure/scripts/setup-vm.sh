@@ -1,63 +1,75 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# PSE Pulse — Ubuntu 24.04 LTS VM Provisioning Script
-# ==============================================================================
-# Target VM SKU: Standard_B2ats_v2 (2 vCPU, 1 GiB RAM)
-# Target OS: Ubuntu 24.04 LTS x86_64
-#
-# DO NOT EXECUTE ON LOCAL DEVELOPMENT MACHINE.
-# Intended for future Azure VM initial bootstrap.
-# ==============================================================================
+# Idempotent, non-deploying bootstrap for the existing Ubuntu 24.04 VM.
+# Run only after separate owner approval through Azure VM Run Command.
+set -Eeuo pipefail
+IFS=$'\n\t'
 
-set -euo pipefail
+log() { printf '[pse-pulse-bootstrap] %s\n' "$*"; }
+fail() { log "ERROR: $*" >&2; exit 1; }
+trap 'rc=$?; log "bootstrap failed at line ${LINENO} (exit ${rc})" >&2; exit "$rc"' ERR
 
-echo ">>> [1/7] Updating Ubuntu package lists..."
-sudo apt-get update -y
-sudo apt-get upgrade -y
+[[ "$(. /etc/os-release && printf '%s' "${ID:-}")" == ubuntu ]] || fail 'Ubuntu is required.'
+[[ "$(. /etc/os-release && printf '%s' "${VERSION_ID:-}")" == 24.04 ]] || fail 'Ubuntu 24.04 is required.'
+[[ "$(uname -m)" == x86_64 ]] || fail 'The approved VM architecture is x86_64.'
 
-echo ">>> [2/7] Installing base runtime packages (Nginx, Python 3.12, Git)..."
-sudo apt-get install -y \
-    nginx \
-    python3.12 \
-    python3.12-venv \
-    python3-pip \
-    git \
-    curl \
-    ufw \
-    fail2ban
+# The approved VM has 4 GiB RAM. Read the host value when available and refuse
+# an unexpectedly smaller target instead of applying the retired 1 GiB tuning.
+mem_kib="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)"
+(( mem_kib >= 3 * 1024 * 1024 )) || fail 'Expected the approved 4 GiB class VM; refusing outdated low-memory setup.'
 
-echo ">>> [3/7] Creating non-root application user 'psepulse'..."
+[[ "${EUID}" -eq 0 ]] || fail 'Run as root through the approved management channel.'
+
+log '[1/5] Installing only runtime prerequisites.'
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y --no-install-recommends \
+  ca-certificates \
+  curl \
+  git \
+  nginx \
+  python3 \
+  python3-venv \
+  python3-pip \
+  rsync
+
+log '[2/5] Ensuring isolated non-login service accounts exist.'
+if ! getent group psepulse >/dev/null; then
+  groupadd --system psepulse
+fi
 if ! id -u psepulse >/dev/null 2>&1; then
-    sudo useradd -r -s /bin/false -d /opt/pse-pulse psepulse
+  useradd --system --gid psepulse --home-dir /opt/pse-pulse \
+    --shell /usr/sbin/nologin --no-create-home psepulse
 fi
+usermod --gid psepulse --home /opt/pse-pulse --shell /usr/sbin/nologin psepulse
+for service_account in psepulse-api psepulse-eod psepulse-migration psepulse-bootstrap; do
+  if ! getent group "$service_account" >/dev/null; then
+    groupadd --system "$service_account"
+  fi
+  if ! id -u "$service_account" >/dev/null 2>&1; then
+    useradd --system --gid "$service_account" --groups psepulse --home-dir /nonexistent \
+      --shell /usr/sbin/nologin --no-create-home "$service_account"
+  else
+    usermod --gid "$service_account" --append --groups psepulse \
+      --home /nonexistent --shell /usr/sbin/nologin "$service_account"
+  fi
+done
 
-echo ">>> [4/7] Creating directories..."
-sudo mkdir -p /var/www/pse-pulse/out
-sudo mkdir -p /opt/pse-pulse
-sudo mkdir -p /etc/pse-pulse
-sudo chown -R www-data:www-data /var/www/pse-pulse
-sudo chown -R psepulse:psepulse /opt/pse-pulse
+log '[3/5] Creating restricted release, data, and configuration directories.'
+install -d -o root -g psepulse -m 0750 \
+  /opt/pse-pulse /opt/pse-pulse/releases /var/lib/pse-pulse \
+  /var/lib/pse-pulse/calendar /var/lib/pse-pulse/models
+install -d -o root -g psepulse-eod -m 0750 \
+  /var/lib/pse-pulse/incoming /var/lib/pse-pulse/approvals
+install -d -o root -g psepulse-bootstrap -m 0750 \
+  /var/lib/pse-pulse/bootstrap-source
+install -d -o root -g root -m 0750 /etc/pse-pulse
+install -d -o root -g root -m 0750 /etc/pse-pulse/tls
+install -d -o root -g www-data -m 0750 \
+  /var/www/pse-pulse /var/www/pse-pulse/releases
+install -d -o root -g root -m 0700 /var/lib/lego
 
-echo ">>> [5/7] Configuring UFW Firewall (SSH restricted to SSH_ALLOWED_CIDR + HTTP + HTTPS)..."
-: "${SSH_ALLOWED_CIDR:?Error: Set SSH_ALLOWED_CIDR to your administrator public IP CIDR before running (e.g. export SSH_ALLOWED_CIDR='203.0.113.10/32')}"
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw allow from "${SSH_ALLOWED_CIDR}" to any port 22 proto tcp comment 'SSH'
-sudo ufw allow 80/tcp comment 'HTTP'
-sudo ufw allow 443/tcp comment 'HTTPS'
-sudo ufw --force enable
+log '[4/5] Keeping the default HTTP site stopped until reviewed HTTPS is installed.'
+rm -f /etc/nginx/sites-enabled/default
+systemctl disable --now nginx.service >/dev/null 2>&1 || true
 
-echo ">>> [6/7] Configuring Swap (1 GiB) for Low-Memory Safety..."
-# A 1 GiB swap file prevents out-of-memory kernel panics on 1 GiB RAM VM
-if [ ! -f /swapfile ]; then
-    sudo fallocate -l 1G /swapfile
-    sudo chmod 600 /swapfile
-    sudo mkswap /swapfile
-    sudo swapon /swapfile
-    echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
-    sudo sysctl vm.swappiness=10
-    echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
-fi
-
-echo ">>> [7/7] VM base provisioning complete!"
-echo "Next: Deploy Nginx configuration, systemd services, and application code."
+log '[5/5] Bootstrap complete. No application unit, timer, database migration, firewall, or Azure resource was changed.'

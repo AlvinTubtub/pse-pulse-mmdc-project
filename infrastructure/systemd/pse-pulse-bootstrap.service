@@ -1,0 +1,33 @@
+[Unit]
+Description=PSE Pulse one-time official historical data bootstrap
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsDirectory=/opt/pse-pulse/current
+ConditionPathIsDirectory=/var/lib/pse-pulse/bootstrap-source
+
+[Service]
+Type=oneshot
+User=psepulse-bootstrap
+Group=psepulse-bootstrap
+SupplementaryGroups=psepulse
+WorkingDirectory=/opt/pse-pulse/current
+EnvironmentFile=/etc/pse-pulse/bootstrap.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PROCESS_ROLE=production-bootstrap
+ExecStart=/opt/pse-pulse/current/backend/.venv-inference/bin/python -m backend.pipeline.production_bootstrap --source-root /var/lib/pse-pulse/bootstrap-source
+TimeoutStartSec=2h
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/opt/pse-pulse /etc/pse-pulse /var/lib/pse-pulse
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pse-pulse-bootstrap

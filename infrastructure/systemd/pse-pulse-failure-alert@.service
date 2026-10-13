@@ -1,0 +1,9 @@
+[Unit]
+Description=Write a local journal alert for failed PSE Pulse unit %i
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -p daemon.err -t pse-pulse-failure "PSE Pulse unit failed: %i"
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true

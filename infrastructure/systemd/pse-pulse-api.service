@@ -1,26 +1,44 @@
 [Unit]
-Description=PSE Pulse FastAPI Backend Service
-After=network.target
+Description=PSE Pulse FastAPI production API
+After=network-online.target
+Wants=network-online.target
+ConditionPathIsDirectory=/opt/pse-pulse/current
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
-Type=simple
-User=psepulse
+Type=exec
+User=psepulse-api
 Group=psepulse
-WorkingDirectory=/opt/pse-pulse
-EnvironmentFile=/etc/pse-pulse/.env
-ExecStart=/opt/pse-pulse/backend/.venv/bin/uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 1 --log-level info
-
-# Memory & Process Protections for 1 GiB Host RAM
-MemoryMax=350M
-MemoryHigh=300M
-Restart=always
+SupplementaryGroups=psepulse
+WorkingDirectory=/opt/pse-pulse/current
+# systemd reads this root-only file before starting the process as psepulse-api.
+EnvironmentFile=/etc/pse-pulse/api.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PROCESS_ROLE=api
+ExecStartPre=/opt/pse-pulse/current/backend/.venv-api/bin/python -m backend.app.production_preflight
+ExecStart=/opt/pse-pulse/current/backend/.venv-api/bin/uvicorn backend.app.main:app --host 127.0.0.1 --port 8000 --workers 1 --log-level info --no-access-log
+Restart=on-failure
 RestartSec=5s
+TimeoutStartSec=90s
+TimeoutStopSec=30s
+KillSignal=SIGINT
+UMask=0077
 
-# Security hardening
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=full
+ProtectSystem=strict
 ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/opt/pse-pulse /etc/pse-pulse /var/lib/pse-pulse
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pse-pulse-api
 
 [Install]
 WantedBy=multi-user.target

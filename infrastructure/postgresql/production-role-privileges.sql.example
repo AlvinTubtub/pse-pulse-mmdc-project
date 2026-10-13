@@ -1,0 +1,66 @@
+-- Review-only PostgreSQL role grant template. Never execute from application
+-- startup or the EOD service. Roles/database must be separately created and
+-- reviewed by the owner. This file intentionally contains no CREATE ROLE.
+-- Example invocation supplies psql variables from a protected maintenance
+-- session; do not place passwords in this file or command arguments.
+--
+-- Required ownership boundary: psepulse_migrator must own the application
+-- schema and the objects Alembic changes, or be a member of the reviewed
+-- schema-owner role. API, EOD, and bootstrap roles must not be members of it.
+
+GRANT CONNECT ON DATABASE :"database_name" TO :"api_role", :"eod_role", :"migration_role", :"bootstrap_role";
+
+\connect :database_name
+
+GRANT USAGE ON SCHEMA public TO :"api_role", :"eod_role", :"migration_role", :"bootstrap_role";
+GRANT CREATE ON SCHEMA public TO :"migration_role";
+
+-- The public API reads operational and forecast state only.
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO :"api_role";
+ALTER DEFAULT PRIVILEGES FOR ROLE :"migration_role" IN SCHEMA public
+  GRANT SELECT ON TABLES TO :"api_role";
+
+-- EOD reads all required inputs and writes only ingestion, forecast, and audit
+-- tables. Migrations must reapply these explicit table grants for new tables.
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO :"eod_role";
+GRANT INSERT, UPDATE ON TABLE public.daily_prices TO :"eod_role";
+GRANT INSERT ON TABLE
+  public.market_data_imports,
+  public.forecasts
+TO :"eod_role";
+GRANT INSERT, UPDATE ON TABLE
+  public.pipeline_runs,
+  public.production_sessions
+TO :"eod_role";
+GRANT USAGE, SELECT ON SEQUENCE
+  public.daily_prices_id_seq,
+  public.market_data_imports_id_seq,
+  public.forecasts_id_seq,
+  public.pipeline_runs_id_seq,
+  public.production_sessions_id_seq
+TO :"eod_role";
+
+-- One-time historical bootstrap writes only canonical company/sector metadata,
+-- historical prices, and import provenance. It needs no forecast or audit rights.
+GRANT SELECT ON TABLE
+  public.sectors,
+  public.companies,
+  public.daily_prices
+TO :"bootstrap_role";
+GRANT INSERT, UPDATE ON TABLE
+  public.sectors,
+  public.companies,
+  public.daily_prices
+TO :"bootstrap_role";
+GRANT INSERT ON TABLE public.market_data_imports TO :"bootstrap_role";
+GRANT USAGE, SELECT ON SEQUENCE
+  public.sectors_id_seq,
+  public.companies_id_seq,
+  public.daily_prices_id_seq,
+  public.market_data_imports_id_seq
+TO :"bootstrap_role";
+
+-- Do not grant schema ownership, DDL, or role membership to API, EOD, or
+-- bootstrap roles. Install each connection string only in its root-owned
+-- systemd environment file. Reapply table and sequence grants after migrations
+-- introduce new objects; the bootstrap role receives no schema or DDL rights.

@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# PSE Pulse — Manual Pipeline Runner Trigger
-# ==============================================================================
+# Production-only scheduler wrapper. The Python entry point validates manifests,
+# the reviewed PSE calendar, model gates, source coverage, and output lineage.
+set -Eeuo pipefail
+IFS=$'\n\t'
 
-set -euo pipefail
-
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "${APP_DIR}"
-
-echo ">>> Triggering PSE Pulse End-of-Day Pipeline..."
-"${APP_DIR}/backend/.venv/bin/python" -m backend.pipeline.runner
+APP_DIR=/opt/pse-pulse/current
+[[ -d "$APP_DIR" && -x "$APP_DIR/backend/.venv-inference/bin/python" ]] || {
+  echo 'Verified active application release is unavailable.' >&2
+  exit 1
+}
+exec "$APP_DIR/backend/.venv-inference/bin/python" -m backend.pipeline.production_runner \
+  --scheduled --reconcile-pending

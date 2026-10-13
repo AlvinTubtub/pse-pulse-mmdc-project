@@ -1,11 +1,12 @@
 [Unit]
-Description=PSE Pulse End-of-Day Pipeline Timer (Weekdays 18:00 PHT)
+Description=PSE Pulse EOD scheduling template (disabled until owner approval)
 
 [Timer]
-# 18:00 PHT (UTC+8) corresponds to 10:00 UTC
-OnCalendar=Mon..Fri 10:00:00 UTC
+# 10:00 UTC = 18:00 Asia/Manila. The service consults the reviewed session calendar.
+OnCalendar=Mon..Fri *-*-* 10:00:00 UTC
 Persistent=true
 RandomizedDelaySec=120
+Unit=pse-pulse-eod.service
 
 [Install]
 WantedBy=timers.target

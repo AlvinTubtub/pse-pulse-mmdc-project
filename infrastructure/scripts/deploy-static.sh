@@ -1,26 +1,19 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# PSE Pulse — Static Frontend Build & Sync Script
-# ==============================================================================
-# Builds Next.js static export and copies files to Nginx web root.
-# ==============================================================================
+# Install a prebuilt, hash-verified static export on the existing VM.
+# This script does not build, call Azure, change the NSG, or start Nginx.
+set -Eeuo pipefail
+IFS=$'\n\t'
 
-set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+if [[ $# -ne 2 ]]; then
+  echo "Usage: $0 <verified-artifact-directory> <full-reviewed-commit-sha>" >&2
+  exit 2
+fi
+ARTIFACT_DIR="$1"
+COMMIT_SHA="$2"
+[[ "$COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo 'A full lowercase Git SHA is required.' >&2; exit 2; }
+[[ "${EUID}" -eq 0 ]] || { echo 'Run only through an approved management channel as root.' >&2; exit 1; }
 
-DEPLOY_DIR="/var/www/pse-pulse/out"
-APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-
-echo ">>> Building Next.js static export..."
-cd "${APP_DIR}/frontend"
-npm ci
-npm run build
-
-echo ">>> Syncing static build to ${DEPLOY_DIR}..."
-sudo mkdir -p "${DEPLOY_DIR}"
-sudo rsync -av --delete out/ "${DEPLOY_DIR}/"
-sudo chown -R www-data:www-data "${DEPLOY_DIR}"
-
-echo ">>> Reloading Nginx..."
-sudo systemctl reload nginx
-
-echo ">>> Static frontend deployment complete!"
+python3 "${ROOT}/infrastructure/scripts/release_manager.py" deploy-static \
+  "$ARTIFACT_DIR" /var/www/pse-pulse --commit "$COMMIT_SHA"
+echo 'Static release verified and atomically activated. Nginx was not started or reloaded.'
