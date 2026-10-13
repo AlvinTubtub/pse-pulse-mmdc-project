@@ -35,7 +35,7 @@ def upgrade() -> None:
         sa.Column('historical_data_source_repository', sa.String(length=500), nullable=False),
         sa.Column('historical_data_source_commit', sa.String(length=40), nullable=False),
         sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column('is_active', sa.Boolean(), server_default=sa.text('1'), nullable=False),
+        sa.Column('is_active', sa.Boolean(), server_default=sa.true(), nullable=False),
         sa.ForeignKeyConstraint(['company_id'], ['companies.id'], name='fk_model_artifacts_company_id'),
         sa.ForeignKeyConstraint(['model_metadata_id'], ['model_metadata.id'], name='fk_model_artifacts_model_metadata_id'),
         sa.PrimaryKeyConstraint('id'),

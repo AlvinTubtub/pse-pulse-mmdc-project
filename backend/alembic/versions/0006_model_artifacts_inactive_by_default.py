@@ -21,7 +21,7 @@ def upgrade() -> None:
             "is_active",
             existing_type=sa.Boolean(),
             existing_nullable=False,
-            server_default=sa.text("false"),
+            server_default=sa.false(),
         )
 
 
@@ -31,5 +31,5 @@ def downgrade() -> None:
             "is_active",
             existing_type=sa.Boolean(),
             existing_nullable=False,
-            server_default=sa.text("true"),
+            server_default=sa.true(),
         )
