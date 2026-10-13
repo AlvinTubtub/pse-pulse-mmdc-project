@@ -52,8 +52,6 @@ class PipelineStatusResponse(BaseSchema):
         "availability_check",
         "ingest",
         "validation",
-        "features",
-        "forecasting",
+        "approved_artifact_inference",
         "persistence",
-        "blob_snapshot",
     ]

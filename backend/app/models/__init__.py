@@ -9,6 +9,7 @@ from backend.app.models.forecast import Forecast
 from backend.app.models.pipeline_run import PipelineRun
 from backend.app.models.market_data_import import MarketDataImport
 from backend.app.models.model_artifact import ModelArtifact
+from backend.app.models.production_session import ProductionSession
 
 __all__ = [
     "Base",
@@ -20,4 +21,5 @@ __all__ = [
     "PipelineRun",
     "MarketDataImport",
     "ModelArtifact",
+    "ProductionSession",
 ]

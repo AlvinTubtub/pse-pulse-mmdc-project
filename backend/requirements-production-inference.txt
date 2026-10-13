@@ -1,0 +1,6 @@
+# Separate real-inference environment; it includes the API/Alembic runtime.
+# A reviewed hash-pinned lock is still required before production deployment.
+-r requirements-production-api.txt
+-r requirements-models.txt
+-r requirements-lstm.txt
+pypdf>=4.2.0,<5.0.0

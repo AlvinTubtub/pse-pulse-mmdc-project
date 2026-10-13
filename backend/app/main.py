@@ -11,7 +11,7 @@ import logging
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 from backend.app.config import get_settings
 from backend.app.database import engine, Base, SessionLocal
@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
                 try:
                     seed_database_if_empty(db)
                 except Exception as e:
-                    logger.error("Error during initial data seed: %s", e)
+                    logger.exception("Non-production database seed failed.")
                 finally:
                     db.close()
             else:
@@ -75,12 +75,12 @@ app = FastAPI(
     version=settings.VERSION,
     description=(
         "Personal PSE market analytics and forecasting engine, optimized for "
-        "Azure for Students free-tier deployment (B2ats_v2 VM + PostgreSQL B1ms)."
+        "a private PostgreSQL deployment with a same-origin HTTPS reverse proxy."
     ),
     lifespan=lifespan,
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    docs_url=None if settings.ENVIRONMENT.lower() == "production" else "/docs",
+    redoc_url=None if settings.ENVIRONMENT.lower() == "production" else "/redoc",
+    openapi_url=None if settings.ENVIRONMENT.lower() == "production" else "/openapi.json",
 )
 
 # CORS Middleware
@@ -96,23 +96,39 @@ app.add_middleware(
 # Global Exception Handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error("Unhandled exception processing %s %s: %s", request.method, request.url.path, exc)
+    logger.exception("Unhandled request failure: method=%s path=%s", request.method, request.url.path)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "An internal server error occurred. Please contact the administrator."},
     )
 
 
-# Root Health Check for monitoring, Nginx upstream checks, and systemd
-@app.get("/health", response_model=HealthResponse, tags=["Health"])
-def health_check():
-    """Small lightweight health probe endpoint."""
+# Liveness never checks PostgreSQL, so a dependency outage does not restart the API.
+@app.get("/health/live", response_model=HealthResponse, tags=["Health"])
+@app.get("/health", response_model=HealthResponse, tags=["Health"], include_in_schema=False)
+def liveness_check():
+    """Confirm that the process can answer an HTTP request."""
     return HealthResponse(
         status="ok",
         version=settings.VERSION,
         environment=settings.ENVIRONMENT,
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
+
+
+@app.get("/health/ready", tags=["Health"])
+def readiness_check():
+    """Check required DB readiness without exposing driver errors."""
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except Exception:
+        logger.exception("Readiness probe could not reach its database dependency.")
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={"status": "not_ready", "reason": "dependency_unavailable"},
+        )
+    return {"status": "ready"}
 
 
 @app.get("/", tags=["Root"])
@@ -122,7 +138,6 @@ def root():
         "project": settings.PROJECT_NAME,
         "version": settings.VERSION,
         "environment": settings.ENVIRONMENT,
-        "docs": "/docs",
         "api_v1": settings.API_V1_PREFIX,
     }
 

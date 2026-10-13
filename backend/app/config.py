@@ -5,9 +5,16 @@ Uses pydantic-settings for robust environment variable validation and defaults.
 
 from functools import lru_cache
 import json
+from pathlib import Path
 from typing import List, Union
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from backend.app.runtime_policy import (
+    validate_database_url,
+    validate_production_flags,
+    validate_api_listener,
+    verify_private_database_resolution as _verify_private_database_resolution,
+)
 
 
 class Settings(BaseSettings):
@@ -16,6 +23,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     # Core Application Settings
@@ -37,6 +45,12 @@ class Settings(BaseSettings):
         default="sqlite:///./pse_pulse_dev.db",
         description="Database connection URL. Supports PostgreSQL (psycopg) and SQLite.",
     )
+    EXPECTED_PRIVATE_DATABASE_HOST: str | None = Field(
+        default=None,
+        description="Owner-verified PostgreSQL FQDN, copied from the existing Azure resource output.",
+    )
+    DATABASE_TLS_ROOT_CERT: str = "/etc/ssl/certs/ca-certificates.crt"
+    PROCESS_ROLE: str = "api"
 
     # CORS
     # In production, this should be restricted to the exact origin(s).
@@ -80,26 +94,10 @@ class Settings(BaseSettings):
         description="Whether to run Base.metadata.create_all() at startup. Defaults to False (Alembic is authoritative). Never allow in production.",
     )
 
-    @model_validator(mode="after")
-    def validate_production_guards(self) -> "Settings":
-        """Fail fast if synthetic demo mode or auto schema creation is enabled in production."""
-        if self.ENVIRONMENT.lower() == "production":
-            if self.DEMO_MODE:
-                raise ValueError(
-                    "DEMO_MODE must be false when ENVIRONMENT=production. "
-                    "Synthetic market data cannot be enabled in production."
-                )
-            if self.AUTO_CREATE_SCHEMA:
-                raise ValueError(
-                    "AUTO_CREATE_SCHEMA must be false when ENVIRONMENT=production. "
-                    "Production schema must be managed exclusively through Alembic."
-                )
-        return self
-
-    # Real ML Model & Forecasting Controls
+    # Production model gates and artifact location.
     REAL_MODELS_ENABLED: bool = Field(
         default=False,
-        description="Gate controlling activation of real model training and inference pipelines in production.",
+        description="Gate controlling real production inference.",
     )
     MODEL_ARTIFACT_ACTIVATION_ENABLED: bool = Field(
         default=False,
@@ -109,11 +107,37 @@ class Settings(BaseSettings):
         default="backend/artifacts/models",
         description="Directory for versioned production model artifacts.",
     )
-
-    # Azure Blob Storage Scaffolding (Optional / Scaffolding only)
     AZURE_STORAGE_CONNECTION_STRING: str | None = None
     AZURE_STORAGE_CONTAINER_NAME: str = "pse-pulse-data"
 
+    @model_validator(mode="after")
+    def validate_production_guards(self) -> "Settings":
+        """Fail fast on unsafe or ambiguous production configuration."""
+        if self.ENVIRONMENT.lower() == "production":
+            validate_production_flags(
+                environment=self.ENVIRONMENT,
+                debug=self.DEBUG,
+                demo_mode=self.DEMO_MODE,
+                auto_create_schema=self.AUTO_CREATE_SCHEMA,
+                real_models_enabled=self.REAL_MODELS_ENABLED,
+                activation_enabled=self.MODEL_ARTIFACT_ACTIVATION_ENABLED,
+                process_role=self.PROCESS_ROLE,
+            )
+            if self.PROCESS_ROLE != "production-eod" and self.REAL_MODELS_ENABLED:
+                raise ValueError("REAL_MODELS_ENABLED may only be true in the dedicated production EOD process.")
+            if self.PROCESS_ROLE == "api":
+                validate_api_listener(self.HOST, self.PORT)
+            validate_database_url(
+                self.DATABASE_URL,
+                self.EXPECTED_PRIVATE_DATABASE_HOST,
+                self.DATABASE_TLS_ROOT_CERT,
+            )
+        return self
+
+
+def verify_private_database_resolution(host: str) -> set[str]:
+    """Refuse database connections if the owner-verified name resolves publicly."""
+    return _verify_private_database_resolution(host)
 
 
 @lru_cache()

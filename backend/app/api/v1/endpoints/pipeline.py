@@ -29,6 +29,32 @@ def get_pipeline_status(
         .all()
     )
 
+    if settings.ENVIRONMENT.lower() == "production":
+        # The production UI receives state and counts only. Internal exceptions,
+        # source paths, hashes, and database error text remain in restricted logs.
+        def _safe_run(row):
+            return PipelineRunRead(
+                id=row.id,
+                run_id=row.run_id,
+                status=row.status,
+                started_at=row.started_at,
+                completed_at=row.completed_at,
+                records_ingested=row.records_ingested,
+                forecasts_generated=row.forecasts_generated,
+                error_message=None,
+                is_demo_run=False,
+            )
+
+        safe_runs = [_safe_run(row) for row in recent_runs]
+        return PipelineStatusResponse(
+            status="idle" if not recent_runs or recent_runs[0].status in {"COMPLETED", "FAILED"} else "active",
+            schedule="Reviewed PSE session calendar; source required; 18:00 Asia/Manila",
+            is_demo_mode=False,
+            last_run=safe_runs[0] if safe_runs else None,
+            recent_runs=safe_runs,
+            last_market_data_import=None,
+        )
+
     last_run_item = None
     if recent_runs:
         lr = recent_runs[0]
@@ -85,7 +111,7 @@ def get_pipeline_status(
 
     return PipelineStatusResponse(
         status="idle" if not recent_runs or recent_runs[0].status == "COMPLETED" else "active",
-        schedule="0 18 * * 1-5 (Weekdays 18:00 PHT)",
+    schedule="Development only: weekdays 18:00 PHT",
         is_demo_mode=settings.DEMO_MODE,
         last_run=last_run_item,
         last_market_data_import=last_import_item,

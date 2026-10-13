@@ -2,10 +2,11 @@
 
 from collections.abc import Sequence
 from datetime import date
+from typing import Protocol
 from typing import Any
 
 from backend.app.forecasting.real.artifacts.schema import ProductionModelMetadata
-from backend.app.forecasting.real.calendar import PSETradingCalendar, manila_now
+from backend.app.forecasting.real.calendar import manila_now
 from backend.app.forecasting.real.domain import (
     CompanyNextDayForecast,
     NextDayPrediction,
@@ -15,21 +16,29 @@ from backend.app.forecasting.real.domain import (
 from backend.app.forecasting.real.inference.predictor import predict_with_production_model
 
 
+class ForecastCalendar(Protocol):
+    def is_session(self, session_date: date) -> bool: ...
+    def next_session(self, origin: date) -> date: ...
+
+
 def predict_next_day_with_artifacts(
     symbol: str,
     records: Sequence[OhlcvRecord],
     loaded_artifacts: Sequence[tuple[Any, ProductionModelMetadata | dict[str, Any]]],
     *,
-    calendar: PSETradingCalendar | None = None,
+    calendar: ForecastCalendar,
 ) -> CompanyNextDayForecast:
     """Forecast next trading session from loaded, checksum-validated production artifacts."""
     history = tuple(records)
     require_chronological_records(history)
-    cal = calendar or PSETradingCalendar()
+    if not history:
+        raise ValueError("At least one approved historical observation is required.")
 
     origin_date = history[-1].trading_date
+    if not calendar.is_session(origin_date):
+        raise ValueError("Forecast origin is not an approved trading session.")
     origin_close = history[-1].close
-    forecast_for = cal.next_trading_day(origin_date)
+    forecast_for = calendar.next_session(origin_date)
     inference_timestamp = manila_now()
 
     predictions: list[NextDayPrediction] = []

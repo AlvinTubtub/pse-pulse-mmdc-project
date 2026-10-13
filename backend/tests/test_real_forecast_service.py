@@ -1,6 +1,6 @@
 """Real serving requires exact pre-activated artifact lineage and never registers rows."""
 
-from datetime import date
+from datetime import date, timedelta
 import inspect
 
 import pytest
@@ -10,7 +10,8 @@ from sqlalchemy.orm import sessionmaker
 from backend.app.database import Base
 from backend.app.forecasting.real.calendar import PSETradingCalendar
 from backend.app.forecasting.real.config import ModelId
-from backend.app.forecasting.real.domain import CompanyNextDayForecast, NextDayPrediction, OhlcvRecord
+from backend.app.forecasting.real.domain import CompanyNextDayForecast, ModelForecast, NextDayPrediction, OhlcvRecord
+from backend.app.production_inputs import ApprovedCalendar, ProductionInputError
 from backend.app.models.company import Company
 from backend.app.models.forecast import Forecast
 from backend.app.models.model_artifact import ModelArtifact
@@ -73,11 +74,14 @@ def _setup_service(monkeypatch, db, tmp_path, *, active=True, tamper=None):
     company = Company(id=1, symbol=symbol, name="Bank", sector_id=1, is_active=True)
     db.add(company)
     history = []
-    for day in range(1, 41):
-        close = 100.0 + day * 0.25
-        record = OhlcvRecord(date(2025, 1, 1).fromordinal(date(2025, 1, 1).toordinal() + day - 1), close, close + 1, close - 1, close, 1000)
-        history.append(record)
-        db.add(DailyPrice(company_id=1, trade_date=record.trading_date, open_price=close, high_price=close + 1, low_price=close - 1, close_price=close, volume=1000))
+    candidate = date(2025, 1, 1)
+    while len(history) < 40:
+        if candidate.weekday() < 5:
+            close = 100.0 + (len(history) + 1) * 0.25
+            record = OhlcvRecord(candidate, close, close + 1, close - 1, close, 1000)
+            history.append(record)
+            db.add(DailyPrice(company_id=1, trade_date=record.trading_date, open_price=close, high_price=close + 1, low_price=close - 1, close_price=close, volume=1000))
+        candidate += timedelta(days=1)
     db.flush()
     entries, loaded = [], {}
     for index, family in enumerate(FAMILIES):
@@ -287,3 +291,107 @@ def test_commit_failure_rolls_back_forecasts_and_writes_failed_audit(monkeypatch
     assert failed_runs[0].status == "FAILED"
     assert failed_runs[0].run_id.startswith("real-infer-")
     assert "injected success commit failure" in failed_runs[0].error_message
+
+
+def test_deferred_failure_leaves_audit_commit_to_production_runner(monkeypatch, db_session, tmp_path):
+    root, _ = _setup_service(monkeypatch, db_session, tmp_path)
+    run = PipelineRun(status="RUNNING", is_demo_run=False)
+    db_session.add(run)
+    db_session.commit()
+    db_session.refresh(run)
+    original_commit = db_session.commit
+    commit_count = 0
+
+    def count_commit():
+        nonlocal commit_count
+        commit_count += 1
+        return original_commit()
+
+    def fail_prediction(*args, **kwargs):
+        raise RuntimeError("injected deferred inference failure")
+
+    monkeypatch.setattr(db_session, "commit", count_commit)
+    monkeypatch.setattr(service_module, "predict_next_day_with_artifacts", fail_prediction)
+    with pytest.raises(RealForecastingError, match="injected deferred inference failure"):
+        RealForecastService(db_session).generate_and_persist_forecasts(
+            root, BUNDLE, target_symbols=["BPI"], model_codes=FAMILIES,
+            pipeline_run=run, commit_transaction=False,
+        )
+
+    assert commit_count == 0
+    db_session.rollback()
+    persisted_run = db_session.query(PipelineRun).filter_by(id=run.id).one()
+    assert persisted_run.status == "RUNNING"
+    assert db_session.query(Forecast).filter(Forecast.pipeline_run_id == run.id).count() == 0
+
+
+def test_approved_calendar_runs_real_predictor_and_cuts_history_off_at_origin(monkeypatch, db_session, tmp_path):
+    from backend.app.forecasting.real.inference import next_day as next_day_module
+
+    root, history = _setup_service(monkeypatch, db_session, tmp_path)
+    origin = history[-1].trading_date
+    target = PSETradingCalendar().next_session(origin)
+    calendar = ApprovedCalendar("d" * 64, origin, target, frozenset({origin, target}))
+
+    # This later observation is deliberately present in the local DB. Production inference
+    # must not use it while reconciling the missed origin session.
+    future_close = history[-1].close + 9.0
+    db_session.add(DailyPrice(
+        company_id=1, trade_date=target, open_price=future_close,
+        high_price=future_close + 1, low_price=future_close - 1,
+        close_price=future_close, volume=1000,
+    ))
+    run = PipelineRun(status="RUNNING", is_demo_run=False)
+    db_session.add(run)
+    db_session.commit()
+    db_session.refresh(run)
+
+    observed_origins = []
+
+    def fake_model(*, fitted_model, metadata, records):
+        observed_origins.append(records[-1].trading_date)
+        model = MODEL_IDS[metadata["model_code"]]
+        return ModelForecast(model, 0.25, records[-1].close + 0.25)
+
+    monkeypatch.setattr(service_module, "predict_next_day_with_artifacts", next_day_module.predict_next_day_with_artifacts)
+    monkeypatch.setattr(next_day_module, "predict_with_production_model", fake_model)
+    summary = RealForecastService(db_session, calendar=calendar).generate_and_persist_forecasts(
+        root, BUNDLE, target_symbols=["BPI"], model_codes=FAMILIES,
+        pipeline_run=run, expected_origin_date=origin, as_of_date=origin,
+        commit_transaction=False,
+    )
+
+    assert summary.status == "PENDING_COMMIT"
+    assert len(summary.items) == 3
+    assert {item.origin_date for item in summary.items} == {origin}
+    assert {item.target_date for item in summary.items} == {target}
+    assert observed_origins == [origin, origin, origin]
+    assert db_session.query(Forecast).filter(Forecast.pipeline_run_id == run.id).count() == 3
+    db_session.rollback()
+    assert db_session.query(Forecast).filter(Forecast.pipeline_run_id == run.id).count() == 0
+
+
+def test_production_forecast_rejects_asof_date_after_approved_origin(monkeypatch, db_session, tmp_path):
+    root, history = _setup_service(monkeypatch, db_session, tmp_path)
+    origin = history[-1].trading_date
+    target = PSETradingCalendar().next_session(origin)
+    calendar = ApprovedCalendar("e" * 64, origin, target, frozenset({origin, target}))
+    with pytest.raises(RealForecastingError, match="as-of cutoff"):
+        RealForecastService(db_session, calendar=calendar).generate_and_persist_forecasts(
+            root, BUNDLE, target_symbols=["BPI"], model_codes=FAMILIES,
+            expected_origin_date=origin, as_of_date=target,
+        )
+
+
+def test_approved_calendar_missing_next_session_coverage_fails_closed():
+    origin = date(2025, 3, 14)
+    calendar = ApprovedCalendar("f" * 64, origin, origin, frozenset({origin}))
+    with pytest.raises(ProductionInputError, match="does not cover"):
+        calendar.next_session(origin)
+
+
+def test_approved_calendar_rejects_unapproved_origin():
+    origin = date(2025, 3, 14)
+    calendar = ApprovedCalendar("1" * 64, origin, origin + timedelta(days=3), frozenset())
+    with pytest.raises(ProductionInputError, match="not an approved trading session"):
+        calendar.next_session(origin)

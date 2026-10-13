@@ -98,9 +98,10 @@ class RealForecastService:
 
     """Coordinates verified artifact loading, inference, lineage, and atomic persistence."""
 
-    def __init__(self, db: Session, calendar: Optional[PSETradingCalendar] = None):
+    def __init__(self, db: Session, calendar: Optional[object] = None):
         self.db = db
-        self.calendar = calendar or PSETradingCalendar()
+        self.calendar = calendar
+        self._calendar_explicit = calendar is not None
         self.settings = get_settings()
 
     def generate_and_persist_forecasts(
@@ -110,6 +111,11 @@ class RealForecastService:
         target_symbols: Optional[Sequence[str]] = None,
         model_codes: Sequence[str] = (ModelId.LAG_REGRESSION.value, ModelId.ARIMA.value, ModelId.LSTM.value),
         dry_run: bool = False,
+        pipeline_run: Optional[PipelineRun] = None,
+        records_ingested: int = 0,
+        expected_origin_date: date | None = None,
+        as_of_date: date | None = None,
+        commit_transaction: bool = True,
     ) -> RealForecastExecutionSummary:
         """Run real next-session inference across companies and persist atomically.
 
@@ -119,6 +125,10 @@ class RealForecastService:
             target_symbols: Optional subset of symbols (defaults to all active companies).
             model_codes: List of model codes to infer (e.g. ['LAG_REGRESSION', 'ARIMA']).
             dry_run: If True, execute inference and validation without database writes.
+            expected_origin_date: Approved source session required for production inference.
+            as_of_date: Latest OHLCV date visible to inference; defaults to expected origin.
+            commit_transaction: False leaves forecast/run writes pending for the caller's
+                final production validation and atomic session commit.
 
         Returns:
             RealForecastExecutionSummary with complete details.
@@ -135,6 +145,20 @@ class RealForecastService:
                 f"REAL_MODELS_ENABLED is False in {current_settings.ENVIRONMENT} environment. "
                 "Real model execution is disabled by configuration."
             )
+        if (current_settings.ENVIRONMENT.lower() == "production" or current_settings.PROCESS_ROLE == "production-eod") and not self._calendar_explicit:
+            raise RealForecastingError("Production inference requires the explicitly verified approved calendar.")
+        if not commit_transaction and (dry_run or pipeline_run is None):
+            raise RealForecastingError("Deferred production commit requires a persistent PipelineRun.")
+        calendar = self.calendar or PSETradingCalendar()
+        if expected_origin_date is not None:
+            if not calendar.is_session(expected_origin_date):
+                raise RealForecastingError("Expected forecast origin is not an approved trading session.")
+            if as_of_date is not None and as_of_date != expected_origin_date:
+                raise RealForecastingError("Historical as-of cutoff must equal the approved forecast origin.")
+            as_of_date = expected_origin_date
+            expected_target_date = calendar.next_session(expected_origin_date)
+        else:
+            expected_target_date = None
 
         artifacts_path = Path(artifacts_root).resolve()
         bundle_dir = artifacts_path / bundle_version
@@ -145,7 +169,14 @@ class RealForecastService:
         manifest, manifest_sha = read_verified_manifest(bundle_dir, expected_version=bundle_version)
         entries_by_key = {(item["symbol"], item["model_code"]): item for item in manifest["entries"]}
 
-        run_uuid = f"real-infer-{uuid.uuid4().hex[:12]}"
+        if pipeline_run is not None:
+            stored_run = self.db.query(PipelineRun).filter(PipelineRun.id == pipeline_run.id).one_or_none()
+            if stored_run is None or stored_run.status != "RUNNING" or stored_run.is_demo_run:
+                raise RealForecastingError("The production audit run must exist, be RUNNING, and be non-demo.")
+            pipeline_run = stored_run
+            run_uuid = stored_run.run_id
+        else:
+            run_uuid = f"real-infer-{uuid.uuid4().hex[:12]}"
         now_utc = datetime.now(timezone.utc)
 
         # 2. Query target companies
@@ -169,17 +200,18 @@ class RealForecastService:
             model_meta_map[norm_code] = matching_metadata[0]
 
         # 4. Initialize PipelineRun audit record if not dry-run
-        pipeline_run: Optional[PipelineRun] = None
+        active_pipeline_run: Optional[PipelineRun] = pipeline_run
         if not dry_run:
-            pipeline_run = PipelineRun(
-                run_id=run_uuid,
-                status="RUNNING",
-                started_at=now_utc,
-                records_ingested=0,
-                forecasts_generated=0,
-                is_demo_run=False,
-            )
-            self.db.add(pipeline_run)
+            if active_pipeline_run is None:
+                active_pipeline_run = PipelineRun(
+                    run_id=run_uuid,
+                    status="RUNNING",
+                    started_at=now_utc,
+                    records_ingested=0,
+                    forecasts_generated=0,
+                    is_demo_run=False,
+                )
+                self.db.add(active_pipeline_run)
 
         summary = RealForecastExecutionSummary(
             run_id=run_uuid,
@@ -194,19 +226,23 @@ class RealForecastService:
         forecasts_to_persist: List[Forecast] = []
 
         try:
-            if pipeline_run:
+            if active_pipeline_run:
                 self.db.flush()
-                summary.pipeline_run_id = pipeline_run.id
+                summary.pipeline_run_id = active_pipeline_run.id
 
             for company in companies:
                 symbol = company.symbol
                 summary.symbols_processed.append(symbol)
 
                 # Load OHLCV history
-                history = load_company_ohlcv_history(self.db, company.id)
+                history = load_company_ohlcv_history(self.db, company.id, end_date=as_of_date)
                 if len(history) < 30:
                     raise RealForecastingError(
                         f"Insufficient OHLCV history for {symbol}: found {len(history)} records, need >= 30"
+                    )
+                if expected_origin_date is not None and history[-1].trading_date != expected_origin_date:
+                    raise RealForecastingError(
+                        f"Latest as-of OHLCV session for {symbol} does not match the approved input session."
                     )
 
                 # Load and verify artifacts for this symbol
@@ -246,8 +282,12 @@ class RealForecastService:
                     symbol=symbol,
                     records=history,
                     loaded_artifacts=loaded_artifacts,
-                    calendar=self.calendar,
+                    calendar=calendar,
                 )
+                if expected_origin_date is not None and company_forecast.origin_date != expected_origin_date:
+                    raise RealForecastingError("Predictor forecast origin differs from the approved input session.")
+                if expected_target_date is not None and company_forecast.forecast_for != expected_target_date:
+                    raise RealForecastingError("Predictor target differs from the next approved calendar session.")
 
                 for pred in company_forecast.predictions:
                     norm_code = _normalize_model_code(pred.model)
@@ -350,7 +390,7 @@ class RealForecastService:
                         company_id=company.id,
                         model_id=meta_record.id,
                         model_artifact_id=db_artifact.id if db_artifact else None,
-                        pipeline_run_id=pipeline_run.id if pipeline_run else None,
+                        pipeline_run_id=active_pipeline_run.id if active_pipeline_run else None,
                         origin_date=pred.origin_date,
                         target_date=pred.forecast_for,
                         predicted_price=incoming_price,
@@ -381,19 +421,22 @@ class RealForecastService:
                     )
 
             if not dry_run:
-                # Complete the audit row and forecasts in one transaction.
-                if pipeline_run:
-                    pipeline_run.status = "COMPLETED"
-                    pipeline_run.completed_at = datetime.now(timezone.utc)
-                    pipeline_run.forecasts_generated = len(forecasts_to_persist)
+                # The production runner may defer commit until its persisted rows,
+                # source import, and complete audit lineage have all been checked.
+                if active_pipeline_run and commit_transaction:
+                    active_pipeline_run.status = "COMPLETED"
+                    active_pipeline_run.completed_at = datetime.now(timezone.utc)
+                    active_pipeline_run.records_ingested = records_ingested
+                    active_pipeline_run.forecasts_generated = len(forecasts_to_persist)
                 self.db.flush()
-                self.db.commit()
+                if commit_transaction:
+                    self.db.commit()
                 summary.total_forecasts_persisted = len(forecasts_to_persist)
+                summary.status = "COMPLETED" if commit_transaction else "PENDING_COMMIT"
             else:
                 summary.total_forecasts_persisted = 0
                 logger.info("Dry-run complete: 0 database mutations committed.")
-
-            summary.status = "COMPLETED"
+                summary.status = "COMPLETED"
             return summary
 
         except Exception as exc:
@@ -403,21 +446,26 @@ class RealForecastService:
             # Atomic rollback of all mutations
             self.db.rollback()
 
-            if not dry_run and pipeline_run:
+            # A production caller that deferred commit owns the encompassing
+            # audit/session transaction. Persisting FAILED here would leave a
+            # PipelineRun failure committed while its ProductionSession is
+            # still RUNNING; the production runner records both together.
+            if not dry_run and active_pipeline_run and commit_transaction:
                 try:
-                    # Rollback removes the RUNNING row; create the failure audit
-                    # explicitly in a fresh transaction using the same run ID.
-                    failed_run = PipelineRun(
-                        run_id=run_uuid,
-                        status="FAILED",
-                        started_at=now_utc,
-                        completed_at=datetime.now(timezone.utc),
-                        records_ingested=0,
-                        forecasts_generated=0,
-                        error_message=str(exc),
-                        is_demo_run=False,
-                    )
-                    self.db.add(failed_run)
+                    failed_run = self.db.query(PipelineRun).filter(PipelineRun.id == active_pipeline_run.id).one_or_none()
+                    if failed_run is None:
+                        failed_run = PipelineRun(
+                            run_id=run_uuid,
+                            status="FAILED",
+                            started_at=now_utc,
+                            is_demo_run=False,
+                        )
+                        self.db.add(failed_run)
+                    failed_run.status = "FAILED"
+                    failed_run.completed_at = datetime.now(timezone.utc)
+                    failed_run.records_ingested = records_ingested
+                    failed_run.forecasts_generated = 0
+                    failed_run.error_message = str(exc)
                     self.db.commit()
                 except Exception as inner_exc:
                     logger.error("Failed to update PipelineRun status: %s", inner_exc)

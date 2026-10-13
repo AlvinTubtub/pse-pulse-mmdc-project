@@ -119,6 +119,9 @@ def run_pipeline(
 ) -> int:
     """Execute the PSE Pulse pipeline."""
     settings = get_settings()
+    if settings.ENVIRONMENT.lower() == "production":
+        logger.error("The generic development pipeline is disabled in production; use backend.pipeline.production_runner.")
+        return 2
     logger.info(
         "Starting PSE Pulse pipeline (Environment: %s, Demo Mode: %s, Dry Run: %s)...",
         settings.ENVIRONMENT,

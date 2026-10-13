@@ -3,13 +3,13 @@
 import os
 import sys
 from logging.config import fileConfig
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, event
 from alembic import context
 
 # Ensure workspace root is in sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from backend.app.config import get_settings
+from backend.app.config import get_settings, verify_private_database_resolution
 from backend.app.models import Base
 
 config = context.config
@@ -55,6 +55,11 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
         connect_args=connect_args,
     )
+
+    if get_settings().ENVIRONMENT.lower() == "production":
+        @event.listens_for(connectable, "do_connect")
+        def _require_private_postgres_address(dialect, connection_record, cargs, cparams):
+            verify_private_database_resolution(get_settings().EXPECTED_PRIVATE_DATABASE_HOST or "")
 
     with connectable.connect() as connection:
         context.configure(

@@ -5,9 +5,9 @@ and SQLite for frictionless local testing and CI without external services.
 """
 
 from typing import Generator
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
-from backend.app.config import get_settings
+from backend.app.config import get_settings, verify_private_database_resolution
 
 settings = get_settings()
 
@@ -22,6 +22,12 @@ engine = create_engine(
     pool_pre_ping=True,
     echo=settings.DEBUG,
 )
+
+if settings.ENVIRONMENT.lower() == "production":
+    @event.listens_for(engine, "do_connect")
+    def _require_private_postgres_address(dialect, connection_record, cargs, cparams):
+        """Validate the Azure private-DNS answer immediately before connecting."""
+        verify_private_database_resolution(settings.EXPECTED_PRIVATE_DATABASE_HOST or "")
 
 SessionLocal = sessionmaker(
     autocommit=False,

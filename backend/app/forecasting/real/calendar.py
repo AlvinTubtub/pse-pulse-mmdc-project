@@ -24,12 +24,20 @@ class PSETradingCalendar:
         """Check if candidate date is an active trading session (Mon-Fri, non-closure)."""
         return candidate.weekday() < 5 and candidate not in self.holidays
 
+    def is_session(self, candidate: date) -> bool:
+        """Calendar protocol alias used by the approved production calendar."""
+        return self.is_trading_day(candidate)
+
     def next_trading_day(self, origin: date) -> date:
         """Return the first configured PSE session strictly after origin."""
         candidate = origin + timedelta(days=1)
         while not self.is_trading_day(candidate):
             candidate += timedelta(days=1)
         return candidate
+
+    def next_session(self, origin: date) -> date:
+        """Calendar protocol alias; production supplies a pinned ApprovedCalendar."""
+        return self.next_trading_day(origin)
 
 
 def next_pse_trading_day(

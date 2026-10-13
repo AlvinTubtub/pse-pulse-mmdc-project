@@ -69,6 +69,24 @@ def read_verified_manifest(bundle_root: Path, *, expected_version: str = ACCEPTA
     return manifest, digest
 
 
+def read_verified_artifact_metadata(bundle_root: Path, entry: Mapping[str, Any]) -> dict[str, Any]:
+    """Read one manifest-pinned metadata file without loading its model binary."""
+    root = Path(bundle_root).resolve()
+    metadata_path = _safe_file(root, entry.get("metadata_relative_path"))
+    if hashlib.sha256(metadata_path.read_bytes()).hexdigest() != entry.get("metadata_sha256"):
+        raise ModelArtifactCompatibilityError("Artifact metadata checksum differs from the approved manifest")
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ModelArtifactCompatibilityError("Artifact metadata is unreadable") from exc
+    if not isinstance(metadata, dict):
+        raise ModelArtifactCompatibilityError("Artifact metadata must be a JSON object")
+    for field in ("symbol", "model_code", "model_version", "artifact_format", "trained_through", "data_row_count"):
+        if metadata.get(field) != entry.get(field):
+            raise ModelArtifactCompatibilityError("Artifact metadata identity differs from the approved manifest")
+    return metadata
+
+
 def load_runtime_artifact(
     *, bundle_root: Path,
     symbol: str,

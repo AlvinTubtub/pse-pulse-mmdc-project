@@ -1,0 +1,11 @@
+# Production API and Alembic runtime only. Python 3.12 on Ubuntu 24.04.
+# Version ranges follow the existing application requirements. A reviewed
+# hash-pinned lock is still required before production deployment.
+fastapi>=0.111.0,<0.116.0
+uvicorn[standard]>=0.30.0,<0.33.0
+pydantic>=2.7.0,<3.0.0
+pydantic-settings>=2.3.0,<3.0.0
+sqlalchemy>=2.0.30,<2.1.0
+alembic>=1.13.0,<1.14.0
+psycopg[binary]>=3.1.18,<3.3.0
+python-dotenv>=1.0.1,<2.0.0
