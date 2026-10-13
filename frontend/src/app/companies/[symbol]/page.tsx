@@ -1,12 +1,10 @@
 import React from "react";
-import { FALLBACK_COMPANIES } from "@/lib/api";
+import { SUPPORTED_COMPANY_SYMBOLS } from "@/lib/supportedSymbols";
 import { CompanyDetailClient } from "@/components/CompanyDetailClient";
 
 // Required for Next.js static export (output: 'export')
 export function generateStaticParams() {
-  return FALLBACK_COMPANIES.map((c) => ({
-    symbol: c.symbol,
-  }));
+  return SUPPORTED_COMPANY_SYMBOLS.map((symbol) => ({ symbol }));
 }
 
 export default async function CompanyDetailPage({

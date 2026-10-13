@@ -1,6 +1,6 @@
 # PSE Pulse — Personal Azure Edition
 
-An independent personal market analytics and forecasting engine tailored specifically for Philippine Stock Exchange (PSE) equities, designed to run within the free-tier allowances of an **Azure for Students** subscription.
+An independent personal market analytics and forecasting engine for Philippine Stock Exchange (PSE) equities. The owner reports that the existing Azure for Students VM and private PostgreSQL resources are deployed; eligibility and remaining credit must be checked before each live operation.
 
 > [!IMPORTANT]
 > **Project Boundary & Independence:**
@@ -10,13 +10,13 @@ An independent personal market analytics and forecasting engine tailored specifi
 
 ## Architecture Overview
 
-PSE Pulse achieves high efficiency and predictable zero-cost hosting by decoupling dynamic API services from static UI delivery:
+PSE Pulse separates its dynamic API from static UI delivery. The current production runtime is being prepared for the already-provisioned Azure resources:
 
 - **Frontend:** Next.js (App Router, TypeScript, Tailwind CSS) compiled via `output: 'export'` into static HTML/CSS/JS. Served directly by Nginx from disk with zero running Node.js server.
-- **Backend:** Python 3.12, FastAPI, Uvicorn, Pydantic, SQLAlchemy 2.0, Alembic. Lightweight process footprint (< 60 MB RSS).
-- **Forecasting:** Pluggable `ForecastProvider` interface supporting baseline models (Lag-Informed Regression, ARIMA, LSTM). In Phase 1, providers operate as lightweight inference stubs; heavy model training runtimes (PyTorch/TensorFlow) are strictly excluded from the production VM.
-- **Database:** PostgreSQL (local `docker-compose.dev.yml` for development; Azure Database for PostgreSQL Flexible Server B1ms in production with a 32 GB storage limit).
-- **Target Host:** Ubuntu 24.04 LTS VM on Azure `Standard_B2ats_v2` (2 vCPU, 1 GiB RAM) or `Standard_B1s` fallback.
+- **Backend:** Python 3.12, FastAPI, Uvicorn, Pydantic, SQLAlchemy 2.0, Alembic. API and inference dependencies are isolated.
+- **Forecasting:** Real Lag-Informed Regression, ARIMA, and LSTM inference requires the separately reviewed model artifacts and explicit production gates. Training and artifact activation are not part of serving.
+- **Database:** Local `docker-compose.dev.yml` for development; owner-reported private Azure PostgreSQL Flexible Server 16, `Standard_B1ms`.
+- **Target host:** Owner-reported Ubuntu 24.04 LTS VM, `Standard_B2als_v2`, East Asia. Public SSH stays disabled; Nginx is intended to serve trusted HTTPS and proxy to a loopback-only API.
 
 ---
 
@@ -52,9 +52,9 @@ pse-pulse-mmdc-project/
 │   ├── tailwind.config.ts     # Tailwind CSS styling configuration
 │   └── tsconfig.json          # TypeScript compiler configuration
 ├── infrastructure/
-│   ├── azure/                 # Bicep IaC scaffolding & parameters (NOT deployed)
+│   ├── azure/                 # Historical IaC files; not the Phase 4C.3 deployment source
 │   ├── nginx/                 # Nginx virtual host configuration template
-│   ├── scripts/               # VM setup, deployment, and pipeline shell scripts
+│   ├── scripts/               # VM setup, verified release, TLS, and production pipeline helpers
 │   └── systemd/               # Systemd services and timer units
 ├── docs/
 │   ├── architecture.md        # Technical architecture & design rationale
@@ -224,8 +224,9 @@ See [docs/model-artifact-contract.md](docs/model-artifact-contract.md) and [docs
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `GET` | `/health` | Lightweight uptime health check probe |
-| `GET` | `/api/v1/system/status` | Process memory RSS, DB connectivity, and cloud target details |
+| `GET` | `/health/live` | Process liveness, independent of database availability |
+| `GET` | `/health/ready` | Generic readiness status including database connectivity |
+| `GET` | `/api/v1/system/status` | Sanitized production runtime status |
 | `GET` | `/api/v1/companies` | List of listed companies with latest prices and changes |
 | `GET` | `/api/v1/companies/{symbol}` | Company profile with recent historical daily prices |
 | `GET` | `/api/v1/forecasts/latest` | Forward forecasts across active model stubs with demo disclaimer |
@@ -236,11 +237,11 @@ See [docs/model-artifact-contract.md](docs/model-artifact-contract.md) and [docs
 
 ## Cost & Azure Guardrails
 
-- **Zero-Cost Goal:** Intended to run entirely within Azure for Students free allowances ($0/mo).
-- **Target VM:** `Standard_B2ats_v2` (2 vCPU, 1 GiB RAM) with a single Premium SSD P6 64-GiB OS disk. Fallback VM: `Standard_B1s`.
-- **Database:** Azure Database for PostgreSQL Flexible Server (Burstable B1ms, 32 GB max storage, auto-grow disabled, public access with single-IP firewall to avoid metered Azure Private DNS zones).
-- **No Heavy Runtimes:** No PyTorch, TensorFlow, Redis, Celery, or Node.js runtime on production VM.
-- Refer to [docs/cost-guardrails.md](docs/cost-guardrails.md) for detailed budget safeguards.
+- **Personal spending limit:** USD 0 out-of-pocket. Never upgrade to Pay-As-You-Go or add a payment method.
+- **Owner-reported student credit:** USD 100 at last report; this balance, expiry, and spending protection are not verified here.
+- **Existing target:** Ubuntu 24.04 `Standard_B2als_v2` VM and private PostgreSQL 16 `Standard_B1ms` in East Asia, according to the owner.
+- **No additional Azure resources:** Phase 4D uses the existing infrastructure only. No public database, port 22, new VM, storage account, paid monitoring, or domain purchase is planned.
+- See [docs/cost-guardrails.md](docs/cost-guardrails.md) and [the Phase 4D deployment runbook](docs/azure-deployment.md).
 
 ---
 

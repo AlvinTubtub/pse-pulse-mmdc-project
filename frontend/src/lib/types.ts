@@ -98,21 +98,6 @@ export interface SystemStatusResponse {
   environment: string;
   debug: boolean;
   version: string;
-  database: {
-    status: string;
-    engine: string;
-  };
-  memory?: {
-    process_rss_mb: number;
-    target_host_ram_mb: number;
-    estimated_footprint_pct: number;
-  };
+  database: string;
   demo_mode: boolean;
-  deployment_target: {
-    cloud: string;
-    primary_vm_sku: string;
-    fallback_vm_sku: string;
-    database_sku: string;
-    blob_tier: string;
-  };
 }
