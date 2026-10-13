@@ -2,7 +2,7 @@ name: PSE Pulse CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "validation/phase4d1" ]
   pull_request:
     branches: [ "main" ]
 
@@ -13,6 +13,24 @@ jobs:
   backend-test:
     name: Backend Tests
     runs-on: ubuntu-latest
+    # Disposable CI-only service credentials. This PostgreSQL service exists
+    # only for this isolated job and is never pointed at Azure or production.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: pse_test
+          POSTGRES_PASSWORD: ci-only-phase4d1-password
+          POSTGRES_DB: pse_phase4d1_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U pse_test -d pse_phase4d1_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      PSE_TEST_DATABASE_URL: postgresql+psycopg://pse_test:ci-only-phase4d1-password@127.0.0.1:5432/pse_phase4d1_test
 
     steps:
       - name: Checkout repository
@@ -32,6 +50,43 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt
           pip install -r backend/requirements-models.txt
+
+      - name: Apply and verify Alembic migrations on disposable PostgreSQL 16
+        env:
+          ENVIRONMENT: test
+          DATABASE_URL: postgresql+psycopg://pse_test:ci-only-phase4d1-password@127.0.0.1:5432/pse_phase4d1_test
+        run: |
+          python -m alembic -c backend/alembic.ini upgrade head
+          python - <<'PY'
+          import os
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+          from sqlalchemy import create_engine, text
+
+          config = Config("backend/alembic.ini")
+          heads = ScriptDirectory.from_config(config).get_heads()
+          if len(heads) != 1:
+              raise SystemExit(f"Expected one Alembic head, found {len(heads)}")
+          engine = create_engine(os.environ["DATABASE_URL"])
+          with engine.connect() as connection:
+              current = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+          engine.dispose()
+          if current != heads[0]:
+              raise SystemExit(f"Database revision {current} does not equal code head {heads[0]}")
+          print(f"Disposable PostgreSQL schema is at Alembic head {current}.")
+          PY
+
+      - name: Run Phase 4D.1 regression and PostgreSQL concurrency tests
+        env:
+          ENVIRONMENT: test
+          DEMO_MODE: "true"
+          DATABASE_URL: "sqlite:///:memory:"
+        run: |
+          pytest -v \
+            backend/tests/test_production_runner.py \
+            backend/tests/test_production_postgres.py \
+            backend/tests/test_real_forecast_service.py \
+            backend/tests/test_real_calendar.py
 
       - name: Compile and test backend
         env:
